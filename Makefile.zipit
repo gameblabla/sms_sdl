@@ -1,5 +1,5 @@
-PRGNAME     = sms_sdl
-CC			= /opt/zipit-toolchain/bin/arm-buildroot-linux-musleabi-gcc
+PRGNAME	= sms_sdl
+CC	= /path/to/openwrt-zipit/staging_dir/toolchain-arm_xscale_gcc-5.3.0_musl-1.1.14_eabi/bin/arm-openwrt-linux-gcc
 
 # Possible choices : rs97, k3s (PAP K3S), sdl, amini, fbdev
 PORT = zipit
@@ -26,6 +26,7 @@ CFLAGS		= -Ofast -fsingle-precision-constant -fno-PIC -flto
 CFLAGS		+= -falign-functions=1 -falign-jumps=1 -falign-loops=1 -falign-labels=1
 CFLAGS		+= -DLSB_FIRST -std=gnu99 -DALIGN_DWORD
 CFLAGS		+= -Isource -Isource/cpu_cores/$(Z80_CORE) -Isource/scalers -Isource/ports/$(PORT) -I./source/sound -Isource/unzip -Isource/sdl -Isource/sound/$(SOUND_ENGINE) -Isource/sound_output
+CFLAGS		+= -I/path/to/openwrt-zipit/staging_dir/target-arm_xscale_musl-1.1.14_eabi/usr/include -L/path/to/openwrt-zipit/staging_dir/target-arm_xscale_musl-1.1.14_eabi/usr/lib
 
 SRCDIR		+= ./source/text/fb
 CFLAGS		+= -Isource/text/fb
@@ -50,7 +51,7 @@ CFLAGS		+= -Isource/scale2x
 SRCDIR		+= ./source/scale2x
 endif
 
-LDFLAGS     = -lc -lgcc -lm -lSDL -lasound -no-pie -Wl,--as-needed -Wl,--gc-sections -s -flto
+LDFLAGS     = -lc -lgcc -lm -lSDL -lasound -Wl,--as-needed -Wl,--gc-sections -s -flto
 
 ifeq ($(SOUND_OUTPUT), portaudio)
 LDFLAGS		+= -lportaudio
