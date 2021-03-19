@@ -3,6 +3,8 @@
 mkdir -p opk
 cp ./sms_sdl opk/sms_sdl
 cp ./sms_sdl.png opk/sms.png
+cp ./sega_game_gear.png opk/sega_game_gear.png
+cp ./sega_master_system.png opk/sega_master_system.png
 cp ./docs/license opk/COPYING
 
 # https://unix.stackexchange.com/questions/219268/how-to-add-new-lines-when-using-echo
@@ -26,6 +28,33 @@ Terminal=false
 Type=Application
 Categories=emulators;
 X-OD-NeedsDownscaling=true' > opk/default."$1".desktop
+
+# Below are entries system section, icons courtesy of Stanley Sy:
+# https://findicons.com/pack/2281/antiseptic_videogame_systems
+
+print '[Desktop Entry]
+Name=Master System
+Comment=Master System emulator
+Exec=sms_sdl %f
+Icon=sega_master_system
+Terminal=false
+Type=Game
+StartupNotify=true
+Categories=emulators.systems;
+X-OD-NeedsDownscaling=true
+X-OD-Filter=.sms' > opk/sms."$1".desktop
+
+print '[Desktop Entry]
+Name=Game Gear
+Comment=Game Gear emulator
+Exec=sms_sdl %f
+Icon=sega_game_gear
+Terminal=false
+Type=Game
+StartupNotify=true
+Categories=emulators.systems;
+X-OD-NeedsDownscaling=true
+X-OD-Filter=.gg' > opk/gg."$1".desktop
 
 mksquashfs ./opk smsplus_"$1".opk -all-root -noappend -no-exports -no-xattrs
 
