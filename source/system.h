@@ -45,6 +45,9 @@
 #define INPUT_PAUSE         0x00000002  /* Master System only */
 #define INPUT_RESET         0x00000004  /* Master System only */
 
+#define SORDM5_KEY_ROWS     7
+#define SORDM5_KEY_RESET    0x80
+
 enum 
 {
 	SRAM_SAVE   = 0,
@@ -57,6 +60,9 @@ typedef struct
 	int32_t analog[2][2];
 	uint8_t pad[2];
 	uint8_t system;
+	/* Sord M5 keyboard matrix, active-high rows Y0-Y6, matching MAME's m5.cpp input ports. */
+	uint8_t m5_key[SORDM5_KEY_ROWS];
+	uint8_t m5_reset;
 } input_t;
 
 /* Game image structure */

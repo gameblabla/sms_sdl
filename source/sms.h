@@ -27,6 +27,13 @@
 
 #define CYCLES_PER_LINE 228
 
+/* Build Sord M5 support by default.  The code paths were previously
+ * guarded by SORDM5_EMU but no supplied Makefile defined it, so .m5
+ * files silently fell back to SMS/SG-style handling. */
+#ifndef SORDM5_EMU
+#define SORDM5_EMU 1
+#endif
+
 enum {
 	SLOT_BIOS   = 0,
 	SLOT_CARD   = 1,

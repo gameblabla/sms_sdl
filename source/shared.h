@@ -46,6 +46,7 @@
 #include "loadrom.h"
 #include "config.h"
 #include "state.h"
+#include "inspect.h"
 #include "z80_wrap.h"
 #include "sound_output.h"
 

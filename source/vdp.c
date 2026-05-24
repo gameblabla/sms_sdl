@@ -232,8 +232,17 @@ static void vdp_reg_w(uint8_t r, uint8_t d)
     case 0x01: /* Mode Control No. 2 */
 		if(vdp.vint_pending)
 		{
-			if(d & 0x20) z80_set_irq_line(vdp.irq, ASSERT_LINE);
-			else z80_set_irq_line(vdp.irq, CLEAR_LINE);
+			#ifdef SORDM5_EMU
+			if (sms.console == CONSOLE_SORDM5)
+			{
+				if(d & 0x20) sordm5_ctc_vdp_interrupt();
+			}
+			else
+			#endif
+			{
+				if(d & 0x20) z80_set_irq_line(vdp.irq, ASSERT_LINE);
+				else z80_set_irq_line(vdp.irq, CLEAR_LINE);
+			}
 		}
 		viewport_check();
 	break;
@@ -268,6 +277,7 @@ static void vdp_reg_w(uint8_t r, uint8_t d)
 
 void vdp_write(int32_t offset, uint8_t data)
 {
+	SMSPLUS_TRACE_VDP_WRITE("sms", offset, data);
 	int32_t index;
 	if (((z80_get_elapsed_cycles() + 1) / CYCLES_PER_LINE) > vdp.line)
 	{
@@ -416,6 +426,7 @@ uint8_t vdp_counter_r(int32_t offset)
 
 void gg_vdp_write(int32_t offset, uint8_t data)
 {
+	SMSPLUS_TRACE_VDP_WRITE("gg", offset, data);
 	int32_t index;
 
 	if (((z80_get_elapsed_cycles() + 1) / CYCLES_PER_LINE) > vdp.line)
@@ -493,6 +504,7 @@ void gg_vdp_write(int32_t offset, uint8_t data)
 
 void md_vdp_write(int32_t offset, uint8_t data)
 {
+	SMSPLUS_TRACE_VDP_WRITE("md", offset, data);
 	int32_t index;
 	switch(offset & 1)
 	{
@@ -557,6 +569,7 @@ void md_vdp_write(int32_t offset, uint8_t data)
 
 void tms_write(int32_t offset, uint8_t data)
 {
+	SMSPLUS_TRACE_VDP_WRITE("tms9918", offset, data);
 	int32_t index;
 	switch(offset & 1)
 	{

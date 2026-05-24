@@ -323,15 +323,23 @@ void SMSPLUS_sound_update(int32_t line)
 	}
 }
 
+static int16_t mix_saturate_i16(int32_t v)
+{
+	if (v > 32767) return 32767;
+	if (v < -32768) return -32768;
+	return (int16_t)v;
+}
+
 /* Generic FM+PSG stereo mixer callback */
 void SMSPLUS_sound_mixer_callback(int16_t *output, int32_t length)
 {
 	int32_t i;
+	int32_t level = option.soundlevel ? option.soundlevel : 1;
 	for(i = 0; i < length; i++)
 	{
-		int16_t temp = (fm_buffer[0][i] + fm_buffer[1][i]) / 2;
-		output[i * 2] = (temp + psg_buffer[0][i]) * option.soundlevel;
-		output[i * 2 + 1] = (temp + psg_buffer[1][i]) * option.soundlevel;
+		int32_t temp = ((int32_t)fm_buffer[0][i] + (int32_t)fm_buffer[1][i]) / 2;
+		output[i * 2] = mix_saturate_i16((temp + (int32_t)psg_buffer[0][i]) * level);
+		output[i * 2 + 1] = mix_saturate_i16((temp + (int32_t)psg_buffer[1][i]) * level);
 	}
 }
 
@@ -341,6 +349,7 @@ void SMSPLUS_sound_mixer_callback(int16_t *output, int32_t length)
 
 void psg_stereo_w(int32_t data)
 {
+	SMSPLUS_TRACE_PSG_WRITE(0x0001, (uint8_t)data);
 	/*if(!snd.enabled) return;*/
 	#if defined(MAME_PSG)
 	SN76489_GGStereoWrite(data);
@@ -354,6 +363,7 @@ void psg_stereo_w(int32_t data)
 
 void psg_write(int32_t data)
 {
+	SMSPLUS_TRACE_PSG_WRITE(0x0000, (uint8_t)data);
 	/*if(!snd.enabled) return;*/
 	#if defined(MAME_PSG)
 	SN76489_Write(data);
@@ -375,12 +385,14 @@ uint32_t fmunit_detect_r(void)
 
 void fmunit_detect_w(uint32_t data)
 {
+	SMSPLUS_TRACE_YM_WRITE(0x00f2, (uint8_t)data);
 	if(/* !snd.enabled || */ !sms.use_fm) return;
 	sms.fm_detect = data;
 }
 
 void fmunit_write(uint32_t offset, uint8_t data)
 {
+	SMSPLUS_TRACE_YM_WRITE((uint16_t)(0x00f0 | (offset & 1)), data);
 	if(/* !snd.enabled || */ !sms.use_fm) return;
 	FM_Write(offset, data);
 }

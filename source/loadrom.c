@@ -479,27 +479,47 @@ uint32_t load_rom (char *filename)
 
 		/* Seek to end of file, and get size */
 		fseek(fd, 0, SEEK_END);
-		cart.size = (uint32_t)ftell(fd);
+		uint32_t file_size = (uint32_t)ftell(fd);
 		fseek(fd, 0, SEEK_SET);
 
-		if (cart.size < 0x4000) cart.size = 0x4000;
-		cart.rom = malloc(cart.size);
+		cart.size = file_size;
+		uint32_t alloc_size = cart.size;
+		if (alloc_size < 0x4000) alloc_size = 0x4000;
+
+		cart.rom = malloc(alloc_size);
 		if (!cart.rom)
 		{
 			fclose(fd);
 			return 0;
 		}
-		fread(cart.rom, cart.size, 1, fd);
+
+		/*
+		 * Pad short images deterministically.  The old code enlarged cart.size
+		 * before fread(), so 8 KB M5 cartridges left the second 8 KB of the
+		 * allocation uninitialised and could be exposed through the $2000-$6FFF
+		 * cartridge window.
+		 */
+		memset(cart.rom, 0xff, alloc_size);
+		if (fread(cart.rom, 1, file_size, fd) != file_size)
+		{
+			fclose(fd);
+			free(cart.rom);
+			cart.rom = NULL;
+			return 0;
+		}
 
 		fclose(fd);
 	}
 
-	/* Take care of image header, if present */
+	/* Take care of image header, if present. */
 	if ((cart.size / 512) & 1)
 	{
 		cart.size -= 512;
-		memcpy (cart.rom, cart.rom + 512, cart.size);
+		memmove(cart.rom, cart.rom + 512, cart.size);
 	}
+
+	/* Keep the visible ROM space at least 16 KB for small fixed-address carts. */
+	if (cart.size < 0x4000) cart.size = 0x4000;
 
 	/* 16k pages */
 	cart.pages = cart.size / 0x4000;

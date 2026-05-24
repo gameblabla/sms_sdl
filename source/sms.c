@@ -48,6 +48,7 @@ uint8_t dummy_read[0x400];
 
 static void writemem_mapper_none(uint16_t offset, uint8_t data)
 {
+	SMSPLUS_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -57,6 +58,7 @@ static void writemem_mapper_sega(uint16_t offset, uint8_t data)
 	{
 		mapper_16k_w(offset & 3, data);
 	}
+	SMSPLUS_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -77,6 +79,7 @@ static void writemem_mapper_codies(uint16_t offset, uint8_t data)
 		mapper_16k_w(3,data);
 		return;
 	}
+	SMSPLUS_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -87,6 +90,7 @@ static void writemem_mapper_korea_msx(uint16_t offset, uint8_t data)
 		mapper_8k_w(offset,data);
 		return;
 	}
+	SMSPLUS_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -97,6 +101,7 @@ static void writemem_mapper_korea(uint16_t offset, uint8_t data)
 		mapper_16k_w(3,data);
 		return;
 	}
+	SMSPLUS_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -125,6 +130,7 @@ static void writemem_mapper_4pak(uint16_t offset, uint8_t data)
 		mapper_16k_w(3, (slot.fcr[1] & 0x30) + data);
 		return;
 	}
+	SMSPLUS_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -309,36 +315,49 @@ void sms_reset(void)
 
 	#ifdef SORDM5_EMU
     case CONSOLE_SORDM5:
-	  /* Taken from http://www.retropc.net/mm/m5/memory.html */
-      /* $0000-$1FFF mapped to internal ROM (8K) */
+    {
+      /*
+       * Sord M5 base map:
+       *   $0000-$1FFF : 8 KB monitor BIOS
+       *   $2000-$6FFF : cartridge ROM area
+       *   $7000-$7FFF : 4 KB internal RAM
+       * Everything else is left as open bus for the stock machine.
+       */
+      for(i = 0x00; i < 0x40; i++)
+      {
+        cpu_readmap[i]  = dummy_read;
+        cpu_writemap[i] = dummy_write;
+      }
+
+      sordm5_ctc_reset();
+
+      /* $0000-$1FFF mapped to internal ROM (8 KB) */
       for(i = 0x00; i < 0x08; i++)
       {
         cpu_readmap[i]  = &coleco.rom[i << 10];
         cpu_writemap[i] = dummy_write;
       }
-    
-      /* $2000-$5FFF mapped to cartridge ROM (max. 16K) */
-      for(i = 0x08; i < 0x17; i++)
+
+      /* $2000-$6FFF mapped to cartridge ROM. */
+      for(i = 0x08; i < 0x1C; i++)
       {
-        cpu_readmap[i]  = &cart.rom[i << 10];
+        uint32_t cart_offset = (uint32_t)(i - 0x08) << 10;
+        cpu_readmap[i]  = (cart.loaded && (cart_offset < cart.size)) ? &cart.rom[cart_offset] : dummy_read;
         cpu_writemap[i] = dummy_write;
       }
-      
-      /* $6000-$6FFF : Reserved */
-      for(i = 0x17; i < 0x19; i++)
+
+      /* $7000-$7FFF mapped to internal RAM (4 KB) */
+      for(i = 0x1C; i < 0x20; i++)
       {
-        cpu_readmap[i]  = dummy_read;
-        cpu_writemap[i] = dummy_write;
+        cpu_readmap[i]  = &sms.wram[(i - 0x1C) << 10];
+        cpu_writemap[i] = &sms.wram[(i - 0x1C) << 10];
       }
-      
-      /* enable internal RAM at $7000-$7FFF (4k internal RAM) */
-      for(i = 0x19; i < 0x21; i++)
-      {
-		cpu_readmap[i]  = &sms.wram[i << 10];
-		cpu_writemap[i] = &sms.wram[i << 10];
-      }
+
+      #ifndef SMSPLUS_HEADLESS
       printf("Sord M5 mode\n");
-    break;
+      #endif
+      break;
+    }
     #endif
     case CONSOLE_SC3000:
     case CONSOLE_SF7000:
@@ -628,5 +647,9 @@ void mapper_16k_w(uint16_t address, uint8_t data)
 
 int32_t sms_irq_callback(int32_t param)
 {
+	#ifdef SORDM5_EMU
+	if (sms.console == CONSOLE_SORDM5)
+		return sordm5_ctc_irq_callback();
+	#endif
 	return 0xFF;
 }

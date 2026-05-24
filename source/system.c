@@ -113,7 +113,12 @@ void system_frame(uint32_t skip_render)
 			vdp.vint_pending = 1;
 			if(vdp.reg[0x01] & 0x20)
 			{
-				z80_set_irq_line(vdp.irq, ASSERT_LINE);
+				#ifdef SORDM5_EMU
+				if (sms.console == CONSOLE_SORDM5)
+					sordm5_ctc_vdp_interrupt();
+				else
+				#endif
+					z80_set_irq_line(vdp.irq, ASSERT_LINE);
 			}
 		}
 

@@ -321,6 +321,11 @@ static void bios_init()
 	snprintf(bios_path, sizeof(bios_path), "%s%s", gdata.biosdir, "BIOS_sordm5.bin");
 	
 	fd = fopen(bios_path, "rb");
+	if(!fd)
+	{
+		/* Developer/test-tree fallback used by the bundled Sord M5 BIOS. */
+		fd = fopen("sordm5bios.bin", "rb");
+	}
 	if(fd)
 	{
 		/* Seek to end of file, and get size */

@@ -1,0 +1,56 @@
+PRGNAME      = smsplus_sdl3
+CC           = gcc
+CXX          = g++
+SOUND_ENGINE ?= crabemu_sn76489
+Z80_CORE     ?= z80
+
+PSG_DEFS :=
+ifeq ($(SOUND_ENGINE),mame_sn76489)
+PSG_DEFS += -DMAME_PSG
+else ifeq ($(SOUND_ENGINE),maxim_sn76489)
+PSG_DEFS += -DMAXIM_PSG
+endif
+IMGUI_DIR   ?= external/imgui
+
+CORE_DIRS    = ./source ./source/cpu_cores/$(Z80_CORE) ./source/sound ./source/sound/$(SOUND_ENGINE)
+CPP_DIRS     = ./source/ports/sdl3
+VPATH        = $(CORE_DIRS) $(CPP_DIRS) $(IMGUI_DIR) $(IMGUI_DIR)/backends
+
+CORE_C       = $(foreach dir,$(CORE_DIRS),$(wildcard $(dir)/*.c))
+PORT_CPP     = $(foreach dir,$(CPP_DIRS),$(wildcard $(dir)/*.cpp))
+IMGUI_CPP    = $(IMGUI_DIR)/imgui.cpp \
+               $(IMGUI_DIR)/imgui_demo.cpp \
+               $(IMGUI_DIR)/imgui_draw.cpp \
+               $(IMGUI_DIR)/imgui_tables.cpp \
+               $(IMGUI_DIR)/imgui_widgets.cpp \
+               $(IMGUI_DIR)/backends/imgui_impl_sdl3.cpp \
+               $(IMGUI_DIR)/backends/imgui_impl_sdlrenderer3.cpp
+
+OBJS_C       = $(notdir $(patsubst %.c,%.o,$(CORE_C)))
+OBJS_CPP     = $(notdir $(patsubst %.cpp,%.opp,$(PORT_CPP) $(IMGUI_CPP)))
+OBJS         = $(OBJS_C) $(OBJS_CPP)
+
+SDL3_CFLAGS := $(shell pkg-config --cflags sdl3 2>/dev/null)
+SDL3_LIBS   := $(shell pkg-config --libs sdl3 2>/dev/null)
+
+COMMON_DEFS  = -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DNOZIP_SUPPORT -DSMSPLUS_SDL3 $(PSG_DEFS)
+COMMON_INC   = -Isource -Isource/cpu_cores/$(Z80_CORE) -Isource/ports/sdl3 -Isource/sound -Isource/sound/$(SOUND_ENGINE) -Isource/sound_output
+IMGUI_INC    = -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
+CFLAGS       = -O2 -g -Wall -Wextra -std=gnu99 $(COMMON_DEFS) $(COMMON_INC) $(SDL3_CFLAGS)
+CXXFLAGS     = -O2 -g -Wall -Wextra -std=c++17 $(COMMON_DEFS) $(COMMON_INC) $(IMGUI_INC) $(SDL3_CFLAGS)
+LDFLAGS      = -lm $(SDL3_LIBS)
+
+$(PRGNAME): check-imgui $(OBJS)
+	$(CXX) -o $@ $(OBJS) $(LDFLAGS)
+
+check-imgui:
+	@test -f $(IMGUI_DIR)/imgui.cpp || (echo "Dear ImGui not found. Clone or copy it to $(IMGUI_DIR), or pass IMGUI_DIR=/path/to/imgui"; exit 1)
+
+$(OBJS_C): %.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(OBJS_CPP): %.opp: %.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+clean:
+	rm -f $(PRGNAME) *.o *.opp

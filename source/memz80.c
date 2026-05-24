@@ -437,42 +437,211 @@ uint8_t  coleco_port_r(uint16_t port)
 }
 
 /*--------------------------------------------------------------------------*/
-/* Sord M5 port handlers                                         */
+/* Sord M5 port handlers                                                    */
 /*--------------------------------------------------------------------------*/
 #ifdef SORDM5_EMU
+
+typedef struct
+{
+	uint8_t vector;
+	uint8_t control[4];
+	uint8_t time_constant[4];
+	uint8_t waiting_for_time_constant[4];
+	uint8_t interrupt_enabled[4];
+	uint8_t interrupt_pending;
+} sordm5_ctc_t;
+
+static sordm5_ctc_t sordm5_ctc;
+
+void sordm5_ctc_reset(void)
+{
+	memset(&sordm5_ctc, 0, sizeof(sordm5_ctc));
+}
+
+static void sordm5_ctc_w(uint8_t channel, uint8_t data)
+{
+	channel &= 3;
+
+	/*
+	 * MAME routes the M5 VDP interrupt through a Z80 CTC daisy device,
+	 * not directly to the CPU.  This lightweight CTC model implements the
+	 * programming visible to BIOS/cart games: vector writes, control words,
+	 * time-constant latching, and channel interrupt vectors.  It intentionally
+	 * does not synthesize the unused timer/counter channels.
+	 */
+	if (sordm5_ctc.waiting_for_time_constant[channel])
+	{
+		sordm5_ctc.time_constant[channel] = data;
+		sordm5_ctc.waiting_for_time_constant[channel] = 0;
+		return;
+	}
+
+	if (!(data & 0x01))
+	{
+		/* Interrupt vector word; channel number supplies bits 1-2. */
+		sordm5_ctc.vector = data & 0xF8;
+		return;
+	}
+
+	sordm5_ctc.control[channel] = data;
+	sordm5_ctc.interrupt_enabled[channel] = (data & 0x80) ? 1 : 0;
+	if (data & 0x02)
+	{
+		/* Reset command clears pending interrupt for this channel. */
+		sordm5_ctc.interrupt_pending &= ~(1 << channel);
+		if (!sordm5_ctc.interrupt_pending)
+			z80_set_irq_line(INPUT_LINE_IRQ0, CLEAR_LINE);
+	}
+	if (data & 0x04)
+		sordm5_ctc.waiting_for_time_constant[channel] = 1;
+}
+
+static uint8_t sordm5_ctc_r(uint8_t channel)
+{
+	channel &= 3;
+	return sordm5_ctc.time_constant[channel];
+}
+
+void sordm5_ctc_vdp_interrupt(void)
+{
+	/* MAME connects the TMS9928A INT callback to CTC TRG3. */
+	if (sordm5_ctc.interrupt_enabled[3])
+	{
+		sordm5_ctc.interrupt_pending |= (1 << 3);
+		z80_set_irq_line(INPUT_LINE_IRQ0, ASSERT_LINE);
+	}
+}
+
+int32_t sordm5_ctc_irq_callback(void)
+{
+	uint8_t channel;
+
+	for (channel = 0; channel < 4; channel++)
+	{
+		if (sordm5_ctc.interrupt_pending & (1 << channel))
+		{
+			sordm5_ctc.interrupt_pending &= ~(1 << channel);
+			if (!sordm5_ctc.interrupt_pending)
+				z80_set_irq_line(INPUT_LINE_IRQ0, CLEAR_LINE);
+			return (sordm5_ctc.vector | (channel << 1)) & 0xFF;
+		}
+	}
+
+	z80_set_irq_line(INPUT_LINE_IRQ0, CLEAR_LINE);
+	return 0xFF;
+}
+
+static uint8_t sordm5_keyboard_r(uint8_t row)
+{
+	uint8_t r = row & 0x07;
+	uint8_t temp = 0x00;
+
+	if (r < SORDM5_KEY_ROWS)
+		temp |= input.m5_key[r];
+
+	/*
+	 * Compatibility bridge for frontends that only know about gamepad-style
+	 * SMS Plus GX input.  New frontends should drive input.m5_key[] directly
+	 * so full M5 keyboard state is available to software.
+	 */
+	switch(r)
+	{
+		case 0x00:
+			if(input.pad[0] & INPUT_BUTTON1) temp |= 0x40;  /* Space */
+			if(input.pad[0] & INPUT_BUTTON2) temp |= 0x80;  /* Enter */
+		break;
+		case 0x01:
+			if(input.system & INPUT_START) temp |= 0x01;  /* 1 key */
+			if(input.system & INPUT_PAUSE) temp |= 0x02;  /* 2 key */
+		break;
+		case 0x05:
+			if(input.pad[0] & INPUT_DOWN) temp |= 0x20;
+		break;
+		case 0x06:
+			if(input.pad[0] & INPUT_UP)    temp |= 0x04;
+			if(input.pad[0] & INPUT_LEFT)  temp |= 0x20;
+			if(input.pad[0] & INPUT_RIGHT) temp |= 0x40;
+		break;
+	}
+
+	return temp;
+}
+
+static uint8_t sordm5_joy_r(void)
+{
+	/* M5 joystick port is active-high: bit set means direction pressed. */
+	uint8_t temp = 0x00;
+
+	if(input.pad[0] & INPUT_RIGHT) temp |= 0x01;
+	if(input.pad[0] & INPUT_UP)    temp |= 0x02;
+	if(input.pad[0] & INPUT_LEFT)  temp |= 0x04;
+	if(input.pad[0] & INPUT_DOWN)  temp |= 0x08;
+
+	if(input.pad[1] & INPUT_RIGHT) temp |= 0x10;
+	if(input.pad[1] & INPUT_UP)    temp |= 0x20;
+	if(input.pad[1] & INPUT_LEFT)  temp |= 0x40;
+	if(input.pad[1] & INPUT_DOWN)  temp |= 0x80;
+
+	return temp;
+}
+
 void sordm5_port_w(uint16_t port, uint8_t data)
 {
-	/* A7 is used as enable input */
-	/* A6 & A5 are used to decode the address */
-	switch(port & 0xE0)
+	port &= 0xFF;
+
+	/* MAME m5_io: global mask $ff, mirrored in 16-byte blocks. */
+	switch (port & 0xF0)
 	{
-		case 0x80:
-		return;
-		case 0xa0:
-			tms_write(port,data);
-		return;
-		case 0xc0:
-		return;
-		case 0xe0:
+		case 0x00:
+			sordm5_ctc_w(port & 0x03, data);
+			return;
+		case 0x10:
+			tms_write(0x10 | (port & 0x01), data);
+			return;
+		case 0x20:
 			psg_write(data);
-		return;
+			return;
+		case 0x30:
+			/* $30 also pages 64KBF RAM carts in MAME; standard ROM carts ignore it. */
+			return;
+		case 0x40:
+			/* Centronics data latch; no printer attached in this lightweight model. */
+			return;
+		case 0x50:
+			/* COM: cassette output/remote and centronics strobe; ignored headlessly. */
+			return;
 		default:
-		return;
+			return;
 	}
 }
 
 uint8_t sordm5_port_r(uint16_t port)
 {
-	/* A7 is used as enable input */
-	/* A6 & A5 are used to decode the address */
-	switch(port & 0xE0)
+	port &= 0xFF;
+
+	switch (port & 0xF0)
 	{
-		case 0xa0:
-			return vdp_read(port);
-		case 0xe0:
-			return 0xff;
-		default:
-			return 0xff;
+		case 0x00:
+			return sordm5_ctc_r(port & 0x03);
+		case 0x10:
+			return vdp_read(0x10 | (port & 0x01));
+		case 0x30:
+		{
+			uint8_t row = port & 0x07;
+			if (row == 0x07)
+				return sordm5_joy_r();
+			return sordm5_keyboard_r(row);
+		}
+		case 0x50:
+			/* MAME sts_r(): bit 0 cassette input, bit 1 printer busy, bit 7 reset key. */
+			return 0x01 | (input.m5_reset ? SORDM5_KEY_RESET : 0x00);
+		case 0xA0:
+			/* Some ported MSX games probe $a8-$ab; MAME maps them as noprw. */
+			if ((port & 0x0C) == 0x08)
+				return 0xFF;
+			break;
 	}
+
+	return 0xFF;
 }
 #endif
