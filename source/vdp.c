@@ -385,7 +385,10 @@ uint8_t vdp_read(int32_t offset)
 			vdp.pending = 0;
 			vdp.vint_pending = 0;
 			vdp.hint_pending = 0;
-			z80_set_irq_line(vdp.irq, CLEAR_LINE);
+#ifdef SORDM5_EMU
+			if (sms.console != CONSOLE_SORDM5)
+#endif
+				z80_set_irq_line(vdp.irq, CLEAR_LINE);
 
 			/* cycle-accurate SPR_COL flag */
 			if (temp & 0x20)

@@ -96,27 +96,38 @@ struct M5Key
 // Rows are active-high and follow the MAME m5.cpp input port layout where known.
 // The direct number-row mapping is required by Pooyan's title screen.
 static constexpr M5Key kM5Keys[] = {
+    {"Ctrl", 0, 0x01, SDLK_LCTRL, SDL_SCANCODE_LCTRL},
+    {"Func", 0, 0x02, SDLK_TAB, SDL_SCANCODE_TAB},
+    {"Shift", 0, 0x04, SDLK_LSHIFT, SDL_SCANCODE_LSHIFT},
+    {"RShift", 0, 0x08, SDLK_RSHIFT, SDL_SCANCODE_RSHIFT},
     {"Space", 0, 0x40, SDLK_SPACE, SDL_SCANCODE_SPACE},
     {"Enter", 0, 0x80, SDLK_RETURN, SDL_SCANCODE_RETURN},
+
     {"1", 1, 0x01, SDLK_1, SDL_SCANCODE_1}, {"2", 1, 0x02, SDLK_2, SDL_SCANCODE_2},
     {"3", 1, 0x04, SDLK_3, SDL_SCANCODE_3}, {"4", 1, 0x08, SDLK_4, SDL_SCANCODE_4},
     {"5", 1, 0x10, SDLK_5, SDL_SCANCODE_5}, {"6", 1, 0x20, SDLK_6, SDL_SCANCODE_6},
     {"7", 1, 0x40, SDLK_7, SDL_SCANCODE_7}, {"8", 1, 0x80, SDLK_8, SDL_SCANCODE_8},
-    {"9", 2, 0x01, SDLK_9, SDL_SCANCODE_9}, {"0", 2, 0x02, SDLK_0, SDL_SCANCODE_0},
-    {"-", 2, 0x04, SDLK_MINUS, SDL_SCANCODE_MINUS}, {"^", 2, 0x08, SDLK_EQUALS, SDL_SCANCODE_EQUALS},
-    {"Q", 2, 0x10, SDLK_Q, SDL_SCANCODE_Q}, {"W", 2, 0x20, SDLK_W, SDL_SCANCODE_W},
-    {"E", 2, 0x40, SDLK_E, SDL_SCANCODE_E}, {"R", 2, 0x80, SDLK_R, SDL_SCANCODE_R},
-    {"T", 3, 0x01, SDLK_T, SDL_SCANCODE_T}, {"Y", 3, 0x02, SDLK_Y, SDL_SCANCODE_Y},
-    {"U", 3, 0x04, SDLK_U, SDL_SCANCODE_U}, {"I", 3, 0x08, SDLK_I, SDL_SCANCODE_I},
-    {"A", 3, 0x10, SDLK_A, SDL_SCANCODE_A}, {"S", 3, 0x20, SDLK_S, SDL_SCANCODE_S},
-    {"D", 3, 0x40, SDLK_D, SDL_SCANCODE_D}, {"F", 3, 0x80, SDLK_F, SDL_SCANCODE_F},
-    {"G", 4, 0x01, SDLK_G, SDL_SCANCODE_G}, {"H", 4, 0x02, SDLK_H, SDL_SCANCODE_H},
-    {"J", 4, 0x04, SDLK_J, SDL_SCANCODE_J}, {"K", 4, 0x08, SDLK_K, SDL_SCANCODE_K},
-    {"Z", 4, 0x10, SDLK_Z, SDL_SCANCODE_Z}, {"X", 4, 0x20, SDLK_X, SDL_SCANCODE_X},
-    {"C", 4, 0x40, SDLK_C, SDL_SCANCODE_C}, {"V", 4, 0x80, SDLK_V, SDL_SCANCODE_V},
-    {"B", 5, 0x01, SDLK_B, SDL_SCANCODE_B}, {"N", 5, 0x02, SDLK_N, SDL_SCANCODE_N},
-    {"M", 5, 0x04, SDLK_M, SDL_SCANCODE_M}, {",", 5, 0x08, SDLK_COMMA, SDL_SCANCODE_COMMA},
+
+    {"Q", 2, 0x01, SDLK_Q, SDL_SCANCODE_Q}, {"W", 2, 0x02, SDLK_W, SDL_SCANCODE_W},
+    {"E", 2, 0x04, SDLK_E, SDL_SCANCODE_E}, {"R", 2, 0x08, SDLK_R, SDL_SCANCODE_R},
+    {"T", 2, 0x10, SDLK_T, SDL_SCANCODE_T}, {"Y", 2, 0x20, SDLK_Y, SDL_SCANCODE_Y},
+    {"U", 2, 0x40, SDLK_U, SDL_SCANCODE_U}, {"I", 2, 0x80, SDLK_I, SDL_SCANCODE_I},
+
+    {"A", 3, 0x01, SDLK_A, SDL_SCANCODE_A}, {"S", 3, 0x02, SDLK_S, SDL_SCANCODE_S},
+    {"D", 3, 0x04, SDLK_D, SDL_SCANCODE_D}, {"F", 3, 0x08, SDLK_F, SDL_SCANCODE_F},
+    {"G", 3, 0x10, SDLK_G, SDL_SCANCODE_G}, {"H", 3, 0x20, SDLK_H, SDL_SCANCODE_H},
+    {"J", 3, 0x40, SDLK_J, SDL_SCANCODE_J}, {"K", 3, 0x80, SDLK_K, SDL_SCANCODE_K},
+
+    {"Z", 4, 0x01, SDLK_Z, SDL_SCANCODE_Z}, {"X", 4, 0x02, SDLK_X, SDL_SCANCODE_X},
+    {"C", 4, 0x04, SDLK_C, SDL_SCANCODE_C}, {"V", 4, 0x08, SDLK_V, SDL_SCANCODE_V},
+    {"B", 4, 0x10, SDLK_B, SDL_SCANCODE_B}, {"N", 4, 0x20, SDLK_N, SDL_SCANCODE_N},
+    {"M", 4, 0x40, SDLK_M, SDL_SCANCODE_M}, {",", 4, 0x80, SDLK_COMMA, SDL_SCANCODE_COMMA},
+
+    {"9", 5, 0x01, SDLK_9, SDL_SCANCODE_9}, {"0", 5, 0x02, SDLK_0, SDL_SCANCODE_0},
+    {"-", 5, 0x04, SDLK_MINUS, SDL_SCANCODE_MINUS}, {"^", 5, 0x08, SDLK_EQUALS, SDL_SCANCODE_EQUALS},
     {".", 5, 0x10, SDLK_PERIOD, SDL_SCANCODE_PERIOD}, {"Down", 5, 0x20, SDLK_DOWN, SDL_SCANCODE_DOWN},
+    {"_", 5, 0x40, SDLK_UNKNOWN, SDL_SCANCODE_GRAVE}, {"Back", 5, 0x80, SDLK_BACKSPACE, SDL_SCANCODE_BACKSPACE},
+
     {"O", 6, 0x01, SDLK_O, SDL_SCANCODE_O}, {"P", 6, 0x02, SDLK_P, SDL_SCANCODE_P},
     {"Up", 6, 0x04, SDLK_UP, SDL_SCANCODE_UP}, {"[", 6, 0x08, SDLK_LEFTBRACKET, SDL_SCANCODE_LEFTBRACKET},
     {"L", 6, 0x10, SDLK_L, SDL_SCANCODE_L}, {"Left", 6, 0x20, SDLK_LEFT, SDL_SCANCODE_LEFT},
@@ -150,7 +161,7 @@ static void set_defaults()
     option.spritelimit = 1;
     option.tms_pal = 2;
     option.nosound = 0;
-    option.soundlevel = 2;
+    option.soundlevel = 1;
     option.use_bios = 1;
 }
 
@@ -296,11 +307,6 @@ static bool load_game(AppState &app, const std::string &path)
     return true;
 }
 
-static void clear_m5_keyboard()
-{
-    for (uint8_t &r : input.m5_key) r = 0;
-    input.m5_reset = 0;
-}
 
 static void set_m5_key(uint8_t row, uint8_t mask, bool down)
 {
@@ -323,11 +329,32 @@ static bool m5_key_from_sdl(SDL_Keycode key, SDL_Scancode scan, bool down)
     return handled;
 }
 
+static bool m5_text_char_is_bound_action(unsigned char c)
+{
+    if (c >= 'a' && c <= 'z') c = static_cast<unsigned char>(std::toupper(c));
+    for (int i = 0; i < ACT_COUNT; i++)
+    {
+        if (i == ACT_M5_1 || i == ACT_M5_2 || i == ACT_MENU || i == ACT_VKBD)
+            continue;
+        SDL_Scancode sc = g_bindings[i].scan;
+        if ((c >= 'A' && c <= 'Z') && sc == static_cast<SDL_Scancode>(SDL_SCANCODE_A + (c - 'A')))
+            return true;
+        if ((c >= '0' && c <= '9') && sc == static_cast<SDL_Scancode>(SDL_SCANCODE_0 + (c - '0')))
+            return true;
+        if (c == ' ' && sc == SDL_SCANCODE_SPACE)
+            return true;
+        if ((c == '\r' || c == '\n') && sc == SDL_SCANCODE_RETURN)
+            return true;
+    }
+    return false;
+}
+
 static void m5_key_from_text(const char *txt)
 {
     if (!txt || !txt[0]) return;
     unsigned char c = static_cast<unsigned char>(txt[0]);
     if (c >= 'a' && c <= 'z') c = static_cast<unsigned char>(std::toupper(c));
+    if (m5_text_char_is_bound_action(c)) return;
     for (const M5Key &mk : kM5Keys)
     {
         if (mk.label[0] && !mk.label[1] && static_cast<unsigned char>(mk.label[0]) == c)
@@ -600,8 +627,22 @@ static void handle_event(AppState &app, const SDL_Event &e)
             app.running = false;
             break;
         case SDL_EVENT_DROP_FILE:
-            if (e.drop.data) { load_game(app, e.drop.data); SDL_free(e.drop.data); }
+        {
+            /*
+             * SDL3 exposes drop.data as const in current headers, but the
+             * allocation is still owned by the caller and must be released
+             * with SDL_free().  Copy the path into std::string before freeing
+             * it so load_game() never observes a dangling pointer.
+             */
+            if (e.drop.data)
+            {
+                const char *dropped_path = static_cast<const char *>(e.drop.data);
+                std::string dropped(dropped_path);
+                SDL_free(const_cast<char *>(dropped_path));
+                load_game(app, dropped);
+            }
             break;
+        }
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP:
         {

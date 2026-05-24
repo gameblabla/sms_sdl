@@ -105,6 +105,10 @@ void system_frame(uint32_t skip_render)
 		/* Run Z80 CPU */
 		line_z80 += CYCLES_PER_LINE;
 		z80_execute((line_z80 - z80_cycle_count));
+#ifdef SORDM5_EMU
+		if (sms.console == CONSOLE_SORDM5)
+			sordm5_ctc_tick(CYCLES_PER_LINE);
+#endif
 		
 		/* Vertical Interrupt */
 		if(vdp.line == iline)

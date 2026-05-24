@@ -51,6 +51,7 @@ extern void sordm5_port_w(uint16_t port, uint8_t data);
 extern uint8_t sordm5_port_r(uint16_t port);
 extern void sordm5_ctc_reset(void);
 extern void sordm5_ctc_vdp_interrupt(void);
+extern void sordm5_ctc_tick(int32_t cycles);
 extern int32_t sordm5_ctc_irq_callback(void);
 #endif
 

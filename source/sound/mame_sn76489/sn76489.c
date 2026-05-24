@@ -1,9 +1,9 @@
 /*
  * Texas Instruments / Sega SN76489-family PSG emulation.
  *
- * This is the compact C backend used by SMS Plus GX when MAME_PSG is enabled.
- * It follows MAME's sn76496_base_device variants and register semantics, but
- * writes directly into SMS Plus GX's existing signed 16-bit stereo buffers.
+ * Compact C backend for SMS Plus GX when MAME_PSG is enabled.  This follows
+ * current MAME sn76496_base_device semantics for the variants used here:
+ * Sega VDP PSG, Game Gear PSG, TI SN76489, and SN76489A-style PSG.
  */
 
 #include <stdint.h>
@@ -14,12 +14,12 @@
 
 sn76489_t PSG;
 
-static int in_noise_mode(void)
+static int sega_noise_mode(void)
 {
-    return (PSG.m_register[6] & 4) != 0;
+    return (PSG.m_register[6] & 0x04) != 0;
 }
 
-static void countdown_cycles(void)
+static void update_ready_state(void)
 {
     if (PSG.m_cycles_to_ready > 0)
     {
@@ -43,7 +43,7 @@ void SN76489_Init(uint32_t machine, uint32_t clock, uint32_t sample_rate)
     switch (machine)
     {
         default:
-        case 0: /* Sega VDP PSG: Master System / Mark III */
+        case 0: /* MAME SEGAPSG: Master System / Mark III VDP PSG */
             PSG.m_feedback_mask = 0x8000;
             PSG.m_whitenoise_tap1 = 0x01;
             PSG.m_whitenoise_tap2 = 0x08;
@@ -54,7 +54,7 @@ void SN76489_Init(uint32_t machine, uint32_t clock, uint32_t sample_rate)
             PSG.m_sega_style_psg = 1;
             break;
 
-        case 1: /* Game Gear PSG: Sega VDP PSG plus stereo register */
+        case 1: /* MAME GAMEGEAR: Sega VDP PSG plus stereo register */
             PSG.m_feedback_mask = 0x8000;
             PSG.m_whitenoise_tap1 = 0x01;
             PSG.m_whitenoise_tap2 = 0x08;
@@ -65,7 +65,7 @@ void SN76489_Init(uint32_t machine, uint32_t clock, uint32_t sample_rate)
             PSG.m_sega_style_psg = 1;
             break;
 
-        case 2: /* ColecoVision / TI SN76489 */
+        case 2: /* MAME SN76489: ColecoVision / TI SN76489 */
             PSG.m_feedback_mask = 0x4000;
             PSG.m_whitenoise_tap1 = 0x01;
             PSG.m_whitenoise_tap2 = 0x02;
@@ -76,7 +76,7 @@ void SN76489_Init(uint32_t machine, uint32_t clock, uint32_t sample_rate)
             PSG.m_sega_style_psg = 0;
             break;
 
-        case 3: /* SG-1000 / SC-3000 / TI SN76489A-style */
+        case 3: /* MAME SN76489A-style: SG-1000 / SC-3000 / SF-7000 */
             PSG.m_feedback_mask = 0x10000;
             PSG.m_whitenoise_tap1 = 0x04;
             PSG.m_whitenoise_tap2 = 0x08;
@@ -88,9 +88,6 @@ void SN76489_Init(uint32_t machine, uint32_t clock, uint32_t sample_rate)
             break;
     }
 
-    for (i = 0; i < 4; i++)
-        PSG.m_volume[i] = 0;
-
     PSG.m_last_register = PSG.m_sega_style_psg ? 3 : 0;
     for (i = 0; i < 8; i += 2)
     {
@@ -101,43 +98,38 @@ void SN76489_Init(uint32_t machine, uint32_t clock, uint32_t sample_rate)
     for (i = 0; i < 4; i++)
     {
         PSG.m_output[i] = 0;
+        PSG.m_count[i] = 0;
         PSG.m_period[i] = (PSG.m_sega_style_psg || i == 3) ? 0 : 0x400;
-        PSG.m_count[i] = 0.0;
     }
 
     PSG.m_RNG = PSG.m_feedback_mask;
     PSG.m_output[3] = PSG.m_RNG & 1;
-
-    PSG.m_cycles_to_ready = 1;
     PSG.m_stereo_mask = 0xff;
-    PSG.m_ready_state = 1;
+    PSG.m_current_clock = PSG.m_clock_divider - 1;
 
     gain &= 0xff;
-    /* SMS Plus GX applies option.soundlevel in the final mixer.  MAME's
-     * original per-channel table is MAX_OUTPUT/4, but that can overflow this
-     * 16-bit mixer at the default level 2 when several channels are high.
-     * Keep MAME's 2 dB ladder and relative levels, but leave mixer headroom. */
-    out = MAX_OUTPUT / 8.0;
+    out = MAX_OUTPUT / 4.0; /* MAME: four channels, each gets 1/4 total range. */
     while (gain-- > 0)
         out *= 1.023292992; /* 0.2 dB */
 
     for (i = 0; i < 15; i++)
     {
-        PSG.m_vol_table[i] = (out > (MAX_OUTPUT / 8.0)) ? (MAX_OUTPUT / 8) : (int32_t)out;
+        PSG.m_vol_table[i] = (out > (MAX_OUTPUT / 4.0)) ? (MAX_OUTPUT / 4) : (int32_t)out;
         out /= 1.258925412; /* 2 dB */
     }
     PSG.m_vol_table[15] = 0;
+
     for (i = 0; i < 4; i++)
         PSG.m_volume[i] = PSG.m_vol_table[PSG.m_register[i * 2 + 1] & 0x0f];
 
-    /* MAME clocks the internal PSG stream at clock/2, then applies the chip's
-     * variant divider (8 for SN76489/Sega PSG).  This gives the usual
-     * clock/(32*N) tone frequency for the SMS/GG PSG. */
-    if (sample_rate == 0 || PSG.m_clock_divider == 0)
-        PSG.m_clocks_per_sample = 0.0;
-    else
-        PSG.m_clocks_per_sample = ((double)clock / 2.0) /
-                                  ((double)PSG.m_clock_divider * (double)sample_rate);
+    PSG.m_ready_state = 1;
+    PSG.m_cycles_to_ready = 0;
+
+    /* MAME runs the PSG stream at clock/2, then applies m_clock_divider
+     * inside sound_stream_update.  The C port keeps the same internal clock
+     * phase and samples the resulting output at SMS Plus GX's mixer rate. */
+    PSG.m_internal_samples_per_output = sample_rate ? ((double)clock / 2.0) / (double)sample_rate : 0.0;
+    PSG.m_internal_sample_phase = 0.0;
 }
 
 void SN76489_GGStereoWrite(uint8_t st)
@@ -150,8 +142,6 @@ void SN76489_Write(uint8_t data)
 {
     int32_t n, r, c;
 
-    PSG.m_cycles_to_ready = 1;
-
     if (data & 0x80)
     {
         r = (data & 0x70) >> 4;
@@ -163,8 +153,8 @@ void SN76489_Write(uint8_t data)
     else
     {
         r = PSG.m_last_register;
-        if (PSG.m_ncr_style_psg && ((r & 1) || (r == 6)))
-            return;
+        /* Current MAME leaves these NCR ignores disabled pending hardware
+         * verification, so this C port does not early-return here either. */
     }
 
     c = r >> 1;
@@ -204,54 +194,66 @@ void SN76489_Write(uint8_t data)
             PSG.m_output[3] = PSG.m_RNG & 1;
             break;
     }
+
+    PSG.m_cycles_to_ready = 1;
+    PSG.m_ready_state = 0;
 }
 
-static void step_generators(double clocks)
+static void mame_internal_tick(void)
 {
     int i;
-    if (clocks <= 0.0)
-        return;
 
-    countdown_cycles();
+    update_ready_state();
+
+    if (PSG.m_current_clock > 0)
+    {
+        PSG.m_current_clock--;
+        return;
+    }
+
+    PSG.m_current_clock = PSG.m_clock_divider - 1;
 
     for (i = 0; i < 3; i++)
     {
-        PSG.m_count[i] -= clocks;
-        while (PSG.m_count[i] <= 0.0)
+        PSG.m_count[i]--;
+        if (PSG.m_count[i] <= 0)
         {
             PSG.m_output[i] ^= 1;
-            if (PSG.m_period[i] <= 0)
-            {
-                PSG.m_count[i] = 1.0;
-                break;
-            }
-            PSG.m_count[i] += (double)PSG.m_period[i];
+            PSG.m_count[i] = PSG.m_period[i];
         }
     }
 
-    PSG.m_count[3] -= clocks;
-    while (PSG.m_count[3] <= 0.0)
+    PSG.m_count[3]--;
+    if (PSG.m_count[3] <= 0)
     {
         int tap1 = (PSG.m_RNG & PSG.m_whitenoise_tap1) != 0;
-        int tap2;
-        uint32_t feedback;
+        int tap2 = (PSG.m_RNG & PSG.m_whitenoise_tap2) != (PSG.m_ncr_style_psg ? PSG.m_whitenoise_tap2 : 0);
 
-        if (PSG.m_ncr_style_psg)
-            tap2 = ((PSG.m_RNG & PSG.m_whitenoise_tap2) != PSG.m_whitenoise_tap2);
-        else
-            tap2 = (PSG.m_RNG & PSG.m_whitenoise_tap2) != 0;
-
-        feedback = (tap1 != (tap2 && in_noise_mode())) ? PSG.m_feedback_mask : 0;
-        PSG.m_RNG >>= 1;
-        PSG.m_RNG |= feedback;
-        PSG.m_output[3] = PSG.m_RNG & 1;
-
-        if (PSG.m_period[3] <= 0)
+        if (tap1 != (tap2 && sega_noise_mode()))
         {
-            PSG.m_count[3] = 1.0;
-            break;
+            PSG.m_RNG >>= 1;
+            PSG.m_RNG |= PSG.m_feedback_mask;
         }
-        PSG.m_count[3] += (double)PSG.m_period[3];
+        else
+        {
+            PSG.m_RNG >>= 1;
+        }
+
+        PSG.m_output[3] = PSG.m_RNG & 1;
+        PSG.m_count[3] = PSG.m_period[3];
+    }
+}
+
+static void advance_to_output_sample(void)
+{
+    if (PSG.m_internal_samples_per_output <= 0.0)
+        return;
+
+    PSG.m_internal_sample_phase += PSG.m_internal_samples_per_output;
+    while (PSG.m_internal_sample_phase >= 1.0)
+    {
+        mame_internal_tick();
+        PSG.m_internal_sample_phase -= 1.0;
     }
 }
 
@@ -265,7 +267,7 @@ void SN76489_Update(int16_t **outputs, int samples)
         int32_t out = 0;
         int32_t out2 = 0;
 
-        step_generators(PSG.m_clocks_per_sample);
+        advance_to_output_sample();
 
         if (PSG.m_stereo)
         {

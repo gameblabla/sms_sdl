@@ -6,7 +6,7 @@ PORT = sdl
 # Possible choices : alsa, pulse (pulseaudio), oss, sdl12 (SDL 1.2 sound output), portaudio, libao
 SOUND_OUTPUT = pulse
 # Possible choices : crabemu_sn76489 (less accurate, GPLv2), maxim_sn76489 (somewhat problematic license but good accuracy)
-SOUND_ENGINE = maxim_sn76489
+SOUND_ENGINE ?= mame_sn76489
 # Possible choices : z80 (accurate but proprietary), eighty (EightyZ80's core, GPLv2)
 Z80_CORE = z80
 SCALE2X_UPSCALER = 1
@@ -33,6 +33,10 @@ ifeq ($(PROFILE), YES)
 CFLAGS 		+= -fprofile-generate=./
 else ifeq ($(PROFILE), APPLY)
 CFLAGS		+= -fprofile-use -fbranch-probabilities
+endif
+
+ifeq ($(SOUND_ENGINE), mame_sn76489)
+CFLAGS 		+= -DMAME_PSG
 endif
 
 ifeq ($(SOUND_ENGINE), maxim_sn76489)

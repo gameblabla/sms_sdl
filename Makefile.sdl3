@@ -1,7 +1,7 @@
 PRGNAME      = smsplus_sdl3
 CC           = gcc
 CXX          = g++
-SOUND_ENGINE ?= crabemu_sn76489
+SOUND_ENGINE ?= mame_sn76489
 Z80_CORE     ?= z80
 
 PSG_DEFS :=

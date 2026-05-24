@@ -27,13 +27,15 @@ typedef struct sn76489_struct
 
     int32_t  m_output[4];
     int32_t  m_period[4];
-    double   m_count[4];
+    int32_t  m_count[4];
     int32_t  m_register[8];
     int32_t  m_volume[4];
     int32_t  m_vol_table[16];
     uint32_t m_RNG;
 
-    double   m_clocks_per_sample;
+    int32_t  m_current_clock;
+    double   m_internal_samples_per_output;
+    double   m_internal_sample_phase;
 } sn76489_t;
 
 extern sn76489_t PSG;

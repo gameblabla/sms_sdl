@@ -196,7 +196,7 @@ static void defaults(void)
     option.spritelimit = 1;
     option.tms_pal = 2;
     option.nosound = 0;
-    option.soundlevel = 2;
+    option.soundlevel = 1;
     option.use_bios = 1;
 }
 

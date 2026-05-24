@@ -28,8 +28,8 @@
  *       - OUT (C),0 outputs 0 on NMOS Z80, $FF on CMOS Z80
  *       - SCF/CCF X/Y flags is ((flags | A) & 0x28) on SGS/SHARP/ZiLOG NMOS Z80,
  *         (flags & A & 0x28) on NEC NMOS Z80, other models unknown.
- *         However, people from the Speccy scene mention that SCF/CCF X/Y results
- *         are inconsistant and may be influenced by I and R registers.
+ *         However, recent findings say that SCF/CCF X/Y results depend on
+ *         whether or not the previous instruction touched the flag register.
  *      This Z80 emulator assumes a ZiLOG NMOS model.
  *
  *   Changes in 3.9:
@@ -140,6 +140,11 @@ uint8_t (*cpu_readport16)(uint16_t port);
    even if IFF2 was set before this instruction. This issue was fixed on
    the CMOS Z80, so until knowing (most) Z80 types on hardware, it's disabled */
 #define HAS_LDAIR_QUIRK     0
+
+/* Current upstream MAME does not latch an NMI on the same edge that clears
+ * RESET.  SMS Plus GX does not expose a RESET input line to this C port, so use
+ * the elapsed-cycle counter as the nearest equivalent guard. */
+#define Z80_HAS_EXECUTED() (z80_cycle_count != 0 || z80_exec != 0)
 
 #define cpu_readmem16(a) cpu_readmap[(a) >> 10][(a) & 0x03FF]
 #define cpu_readop(a) cpu_readmap[(a) >> 10][(a) & 0x03FF]
@@ -3564,8 +3569,9 @@ void z80_set_irq_line(int32_t inputnum, int32_t state)
 	switch (inputnum)
 	{
 		case INPUT_LINE_NMI:
-			/* mark an NMI pending on the rising edge */
-			if (Z80.nmi_state == CLEAR_LINE && state != CLEAR_LINE)
+			/* Match current MAME: mark an NMI pending on the rising edge,
+			 * but not at the same instant RESET is cleared. */
+			if (Z80.nmi_state == CLEAR_LINE && state != CLEAR_LINE && Z80_HAS_EXECUTED())
 				Z80.nmi_pending = 1;
 			Z80.nmi_state = state;
 			break;
