@@ -136,7 +136,6 @@ void (*cpu_writemem16)(uint16_t address, uint8_t data);
 void (*cpu_writeport16)(uint16_t port, uint8_t data);
 uint8_t (*cpu_readport16)(uint16_t port);
 extern uint8_t sms_readmem16(uint16_t address);
-extern uint8_t sms_readop16(uint16_t address);
 
 /* On an NMOS Z80, if LD A,I or LD A,R is interrupted, P/V flag gets reset,
    even if IFF2 was set before this instruction. This issue was fixed on
@@ -149,7 +148,10 @@ extern uint8_t sms_readop16(uint16_t address);
 #define Z80_HAS_EXECUTED() (z80_cycle_count != 0 || z80_exec != 0)
 
 #define cpu_readmem16(a) sms_readmem16((uint16_t)(a))
-#define cpu_readop(a) (((slot.mapper == MAPPER_COLECO_MEGACART) && ((uint16_t)(a) >= 0x8000)) ? sms_readop16((uint16_t)(a)) : cpu_readmap[(a) >> 10][(a) & 0x03FF])
+/* Opcode fetches are intentionally a direct page-table lookup.  Mappers
+ * that need bank switching should keep cpu_readmap[] current rather than
+ * adding per-fetch branches here. */
+#define cpu_readop(a) cpu_readmap[(a) >> 10][(a) & 0x03FF]
 #define cpu_readop_arg(a) cpu_readop(a)
 
 /****************************************************************************/

@@ -151,8 +151,11 @@ struct AppState
     SDL_Gamepad *gamepad = nullptr;
     UiSettings ui;
     std::string rom_path;
-    std::string bios_path;
+    std::string bios_path;      // Generic/SMS BIOS path, also honored for legacy systems.
+    std::string coleco_bios_path;
+    std::string resolved_bios_path;
     std::string status;
+    uint8_t requested_console = 0;
     bool running = true;
     bool rom_loaded = false;
     bool paused = false;
@@ -190,6 +193,19 @@ static void set_console_from_path(const std::string &path)
     else if (!SDL_strcasecmp(ext, ".gg")) option.console = 3;
 }
 
+static uint8_t console_option_from_name(const char *name)
+{
+    if (!name) return 0;
+    if (!SDL_strcasecmp(name, "sordm5") || !SDL_strcasecmp(name, "m5")) return 7;
+    if (!SDL_strcasecmp(name, "coleco") || !SDL_strcasecmp(name, "colecovision")) return 6;
+    if (!SDL_strcasecmp(name, "gg")) return 3;
+    if (!SDL_strcasecmp(name, "ggms")) return 4;
+    if (!SDL_strcasecmp(name, "sg") || !SDL_strcasecmp(name, "sg1000")) return 5;
+    if (!SDL_strcasecmp(name, "sms2")) return 2;
+    if (!SDL_strcasecmp(name, "sms")) return 1;
+    return 0;
+}
+
 static bool load_exact(const std::string &path, uint8_t *dst, size_t dst_size, size_t min_size, size_t *actual = nullptr)
 {
     FILE *fp = std::fopen(path.c_str(), "rb");
@@ -210,7 +226,52 @@ static bool load_exact(const std::string &path, uint8_t *dst, size_t dst_size, s
     return true;
 }
 
-static bool init_bios(const AppState &app)
+
+static bool file_readable(const std::filesystem::path &path)
+{
+    std::error_code ec;
+    return !path.empty() && std::filesystem::is_regular_file(path, ec);
+}
+
+static void append_bios_candidates(std::vector<std::filesystem::path> &out,
+                                   const std::filesystem::path &dir,
+                                   std::initializer_list<const char *> names)
+{
+    if (dir.empty()) return;
+    for (const char *name : names)
+        out.emplace_back(dir / name);
+}
+
+static std::string find_local_bios(const std::string &rom_path,
+                                   std::initializer_list<const char *> names)
+{
+    std::vector<std::filesystem::path> candidates;
+    std::error_code ec;
+
+    append_bios_candidates(candidates, std::filesystem::current_path(ec), names);
+
+    if (!rom_path.empty())
+    {
+        std::filesystem::path rp(rom_path);
+        append_bios_candidates(candidates, rp.parent_path(), names);
+    }
+
+    const char *home = std::getenv("HOME");
+    if (home && *home)
+    {
+        std::filesystem::path hp(home);
+        append_bios_candidates(candidates, hp / ".smsplus" / "bios", names);
+        append_bios_candidates(candidates, hp / ".smsplusgx" / "bios", names);
+        append_bios_candidates(candidates, hp / ".config" / "smsplusgx" / "bios", names);
+    }
+
+    for (const auto &candidate : candidates)
+        if (file_readable(candidate))
+            return candidate.string();
+    return {};
+}
+
+static bool init_bios(AppState &app)
 {
     if (!bios.rom)
         bios.rom = static_cast<uint8_t *>(std::calloc(1, 0x100000));
@@ -226,11 +287,35 @@ static bool init_bios(const AppState &app)
         bios.pages = static_cast<uint16_t>(size / 0x4000);
     }
 
-    if (sms.console == CONSOLE_COLECO || sms.console == CONSOLE_SORDM5)
+    if (sms.console == CONSOLE_COLECO)
+    {
+        std::string path = app.coleco_bios_path.empty() ? app.bios_path : app.coleco_bios_path;
+        if (path.empty())
+            path = find_local_bios(app.rom_path, {"BIOS.col", "bios.col", "coleco.rom", "coleco.bin", "colecovision.rom", "COLECO.ROM"});
+        if (path.empty())
+        {
+            app.status = "ColecoVision BIOS missing. Put BIOS.col next to the executable/ROM or pass --coleco-bios BIOS.col.";
+            return false;
+        }
+        if (!load_exact(path, coleco.rom, sizeof(coleco.rom), 0x2000))
+        {
+            app.status = "Failed to load ColecoVision BIOS: " + path;
+            return false;
+        }
+        app.coleco_bios_path = path;
+        app.resolved_bios_path = path;
+    }
+    else if (sms.console == CONSOLE_SORDM5)
     {
         std::string path = app.bios_path;
-        if (path.empty() && sms.console == CONSOLE_SORDM5) path = "sordm5bios.bin";
-        if (!path.empty() && !load_exact(path, coleco.rom, sizeof(coleco.rom), 0x2000)) return false;
+        if (path.empty())
+            path = find_local_bios(app.rom_path, {"sordm5bios.bin", "SORDM5BIOS.BIN", "m5bios.bin", "M5BIOS.BIN"});
+        if (!path.empty() && !load_exact(path, coleco.rom, sizeof(coleco.rom), 0x2000))
+        {
+            app.status = "Failed to load Sord M5 BIOS: " + path;
+            return false;
+        }
+        if (!path.empty()) app.resolved_bios_path = path;
     }
     return true;
 }
@@ -298,16 +383,22 @@ static bool load_game(AppState &app, const std::string &path)
     }
 
     set_defaults();
-    set_console_from_path(path);
+    if (app.requested_console) option.console = app.requested_console;
+    else set_console_from_path(path);
     std::snprintf(option.game_name, sizeof(option.game_name), "%s", path.c_str());
     if (!load_rom(const_cast<char *>(path.c_str())))
     {
         app.status = "Failed to load ROM: " + path;
         return false;
     }
-    if (!init_bitmap() || !init_bios(app))
+    if (!init_bitmap())
     {
-        app.status = "Failed to initialize bitmap or BIOS";
+        app.status = "Failed to initialize bitmap";
+        return false;
+    }
+    if (!init_bios(app))
+    {
+        if (app.status.empty()) app.status = "Failed to initialize BIOS";
         return false;
     }
     system_poweron();
@@ -514,16 +605,17 @@ static void parse_args(AppState &app, int argc, char **argv)
         };
         if (!std::strcmp(a, "--rom")) { if (const char *v = need(a)) app.rom_path = v; }
         else if (!std::strcmp(a, "--bios")) { if (const char *v = need(a)) app.bios_path = v; }
+        else if (!std::strcmp(a, "--coleco-bios")) { if (const char *v = need(a)) app.coleco_bios_path = v; }
         else if (!std::strcmp(a, "--sram")) { if (const char *v = need(a)) g_sram_path = v; }
         else if (!std::strcmp(a, "--console"))
         {
             if (const char *v = need(a))
             {
-                if (!SDL_strcasecmp(v, "sordm5") || !SDL_strcasecmp(v, "m5")) option.console = 7;
-                else if (!SDL_strcasecmp(v, "coleco")) option.console = 6;
-                else if (!SDL_strcasecmp(v, "gg")) option.console = 3;
-                else if (!SDL_strcasecmp(v, "sms2")) option.console = 2;
-                else if (!SDL_strcasecmp(v, "sms")) option.console = 1;
+                app.requested_console = console_option_from_name(v);
+                if (!app.requested_console)
+                    std::fprintf(stderr, "Unknown console '%s'\n", v);
+                else
+                    option.console = app.requested_console;
             }
         }
         else if (!std::strcmp(a, "--fullscreen")) app.ui.fullscreen = true;
@@ -596,7 +688,7 @@ static std::vector<std::filesystem::directory_entry> list_browser(const std::fil
     for (auto &e : std::filesystem::directory_iterator(dir, ec))
     {
         if (e.is_directory() || e.path().extension() == ".sms" || e.path().extension() == ".gg" ||
-            e.path().extension() == ".sg" || e.path().extension() == ".col" || e.path().extension() == ".m5")
+            e.path().extension() == ".sg" || e.path().extension() == ".col" || e.path().extension() == ".m5" || e.path().extension() == ".bin")
             entries.push_back(e);
     }
     std::sort(entries.begin(), entries.end(), [](const auto &a, const auto &b) {
@@ -716,7 +808,10 @@ static void draw_menu(AppState &app)
         if (ImGui::BeginTabItem("Machine"))
         {
             ImGui::Text("ROM: %s", app.rom_path.empty() ? "<none>" : app.rom_path.c_str());
-            ImGui::Text("BIOS: %s", app.bios_path.empty() ? "<default>" : app.bios_path.c_str());
+            const char *bios_text = !app.resolved_bios_path.empty() ? app.resolved_bios_path.c_str() :
+                                    (!app.coleco_bios_path.empty() ? app.coleco_bios_path.c_str() :
+                                     (!app.bios_path.empty() ? app.bios_path.c_str() : "<auto/default>"));
+            ImGui::Text("BIOS: %s", bios_text);
             ImGui::Text("Console: %u", sms.console);
             if (ImGui::Button(app.paused ? "Resume" : "Pause")) app.paused = !app.paused;
             ImGui::SameLine();
@@ -830,14 +925,14 @@ static bool init_sdl(AppState &app)
     app.renderer = SDL_CreateRenderer(app.window, nullptr);
     if (!app.renderer) return false;
     #ifdef SMSPLUS_RENDER_32BPP
-#if defined(SDL_PIXELFORMAT_XRGB8888)
+    /*
+     * Do not hide this behind #if defined(SDL_PIXELFORMAT_XRGB8888).  In SDL3
+     * some pixel formats may be enum constants rather than preprocessor macros,
+     * and the old conditional could silently fall back to an RGB565 texture while
+     * the core was uploading 32 bpp XRGB8888 pixels.  That produces the yellow
+     * vertical-stripe screen reported on real SDL3 builds.
+     */
     app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, BITMAP_W, BITMAP_H);
-#elif defined(SDL_PIXELFORMAT_ARGB8888)
-    app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, BITMAP_W, BITMAP_H);
-#else
-    /* Fake/minimal SDL3 headers used by CI may not expose 32 bpp formats. */
-    app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, BITMAP_W, BITMAP_H);
-#endif
 #else
     app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, BITMAP_W, BITMAP_H);
 #endif

@@ -180,38 +180,65 @@ static void writemem_mapper_wonderkid(uint16_t offset, uint8_t data)
  * address space selects the active bank using the low address bits.  The bank
  * count is required to be a power of two for the address-mask behavior.
  */
+static void coleco_megacart_map_active_bank(uint16_t bank)
+{
+    uint_fast8_t i;
+    uint32_t bankcount = slot.coleco_megacart_bankcount ? slot.coleco_megacart_bankcount : (cart.size >> 14);
+
+    if (bankcount == 0)
+        bankcount = 1;
+
+    /* MegaCart bank counts are constrained to powers of two by loader
+     * detection, matching the low-address-bit mask behavior used by the
+     * hardware/MAME device. */
+    bank &= (uint16_t)(bankcount - 1);
+    slot.coleco_megacart_activebank = bank;
+
+    /* $C000-$FFFF: active 16 KiB bank.  Keeping cpu_readmap[] current makes
+     * Z80 opcode fetches a direct pointer lookup with no mapper branch in the
+     * hot path. */
+    for (i = 0x30; i < 0x40; i++)
+    {
+        cpu_readmap[i] = &cart.rom[((uint32_t)bank << 14) | ((i & 0x0F) << 10)];
+        cpu_writemap[i] = dummy_write;
+    }
+}
+
 static void coleco_megacart_reset(void)
 {
+    uint_fast8_t i;
+    uint32_t bank;
     uint32_t banks = cart.size >> 14;
-    if (banks < 2) banks = 2;
+
+    if (banks < 2)
+        banks = 2;
+
     slot.coleco_megacart_bankcount = (uint16_t)banks;
-    slot.coleco_megacart_activebank = 0;
+
+    /* $8000-$BFFF: fixed final 16 KiB bank. */
+    bank = (slot.coleco_megacart_bankcount - 1) << 14;
+    for (i = 0x20; i < 0x30; i++)
+    {
+        cpu_readmap[i] = &cart.rom[bank | ((i & 0x0F) << 10)];
+        cpu_writemap[i] = dummy_write;
+    }
+
+    coleco_megacart_map_active_bank(0);
 }
 
 static uint8_t coleco_megacart_read(uint16_t address)
 {
-    uint32_t offset = (uint32_t)(address - 0x8000);
-    uint32_t bankcount = slot.coleco_megacart_bankcount ? slot.coleco_megacart_bankcount : (cart.size >> 14);
-    uint32_t rom_offset;
+    /* Reads from $FFC0-$FFFF select the active bank.  Data reads go through
+     * this function; after the bank is selected, both data reads and opcode
+     * fetches use the updated direct page table. */
+    if (address >= 0xFFC0)
+    {
+        uint32_t bankcount = slot.coleco_megacart_bankcount ? slot.coleco_megacart_bankcount : (cart.size >> 14);
+        if (bankcount > 1)
+            coleco_megacart_map_active_bank((uint16_t)(address & (bankcount - 1)));
+    }
 
-    if (address < 0x8000)
-        return cpu_readmap[address >> 10][address & 0x03FF];
-
-    if (bankcount <= 2)
-        return cart.rom[offset & (cart.size - 1)];
-
-    if (offset >= 0x7FC0)
-        slot.coleco_megacart_activebank = (uint16_t)(offset & (bankcount - 1));
-
-    if (offset >= 0x4000)
-        rom_offset = ((uint32_t)slot.coleco_megacart_activebank << 14) + (offset - 0x4000);
-    else
-        rom_offset = ((bankcount - 1) << 14) + offset;
-
-    if (rom_offset >= cart.size)
-        rom_offset %= cart.size;
-
-    return cart.rom[rom_offset];
+    return cpu_readmap[address >> 10][address & 0x03FF];
 }
 
 static uint8_t mapper_93c46_read(uint16_t address)
@@ -256,13 +283,6 @@ uint8_t sms_readmem16(uint16_t address)
 {
     if (slot.mapper == MAPPER_93C46)
         return mapper_93c46_read(address);
-    if (slot.mapper == MAPPER_COLECO_MEGACART && address >= 0x8000)
-        return coleco_megacart_read(address);
-    return cpu_readmap[address >> 10][address & 0x03FF];
-}
-
-uint8_t sms_readop16(uint16_t address)
-{
     if (slot.mapper == MAPPER_COLECO_MEGACART && address >= 0x8000)
         return coleco_megacart_read(address);
     return cpu_readmap[address >> 10][address & 0x03FF];
@@ -450,24 +470,6 @@ void sms_reset(void)
       if (cart.mapper == MAPPER_COLECO_MEGACART)
       {
         coleco_megacart_reset();
-
-        /*
-         * Install conservative direct pages for opcode prefetch.  Data reads
-         * and opcode fetches in the cart window are still routed through
-         * sms_readmem16()/sms_readop16() so reads from $FFC0-$FFFF can perform
-         * the MegaCart bank-select side effect.
-         */
-        for(i = 0x20; i < 0x30; i++)
-        {
-          uint32_t bank = (slot.coleco_megacart_bankcount - 1) << 14;
-          cpu_readmap[i]  = &cart.rom[bank + ((i & 0x0F) << 10)];
-          cpu_writemap[i] = dummy_write;
-        }
-        for(i = 0x30; i < 0x40; i++)
-        {
-          cpu_readmap[i]  = &cart.rom[((i & 0x0F) << 10)];
-          cpu_writemap[i] = dummy_write;
-        }
       }
       else
       {
