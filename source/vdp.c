@@ -348,6 +348,41 @@ void vdp_write(int32_t offset, uint8_t data)
   }
 }
 
+static int vdp_vcounter_line_for_now(void)
+{
+    int32_t cyc = z80_get_elapsed_cycles();
+    int32_t line = (cyc / CYCLES_PER_LINE) % vdp.lpf;
+    int32_t dot = cyc % CYCLES_PER_LINE;
+    /* Gearsystem's Madou fix uses separate GG timings: VCOUNT/FLAG_VINT at
+     * cycle 28/27 instead of the SMS-era 25/25. */
+    int32_t vcount_cycle = (sms.console == CONSOLE_GG) ? 28 : 25;
+    if (dot >= vcount_cycle) line = (line + 1) % vdp.lpf;
+    return line;
+}
+
+static void vdp_update_vint_flag_for_now(void)
+{
+    int32_t cyc = z80_get_elapsed_cycles();
+    int32_t line = (cyc / CYCLES_PER_LINE) % vdp.lpf;
+    int32_t dot = cyc % CYCLES_PER_LINE;
+    int32_t flag_cycle = (sms.console == CONSOLE_GG) ? 27 : 25;
+
+    if ((line == vdp.height) && (dot >= flag_cycle))
+    {
+        vdp.status |= 0x80;
+        vdp.vint_pending = 1;
+        if (vdp.reg[0x01] & 0x20)
+        {
+#ifdef SORDM5_EMU
+            if (sms.console == CONSOLE_SORDM5)
+                sordm5_ctc_vdp_interrupt();
+            else
+#endif
+                z80_set_irq_line(vdp.irq, ASSERT_LINE);
+        }
+    }
+}
+
 uint8_t vdp_read(int32_t offset)
 {
 	uint8_t temp;
@@ -362,6 +397,7 @@ uint8_t vdp_read(int32_t offset)
 		return temp;
 		case 1: /* Status flags */
 		{
+			vdp_update_vint_flag_for_now();
 			/* cycle-accurate SPR_OVR and INT flags */
 			int32_t cyc   = z80_get_elapsed_cycles();
 			int32_t line  = vdp.line;
@@ -413,7 +449,7 @@ uint8_t vdp_counter_r(int32_t offset)
 	switch(offset & 1)
 	{
 		case 0: /* V Counter */
-			return vc_table[sms.display][vdp.extended][z80_get_elapsed_cycles() / CYCLES_PER_LINE];
+			return vc_table[sms.display][vdp.extended][vdp_vcounter_line_for_now()];
 		case 1: /* H Counter -- return previously latched values or ZERO */
 			return sms.hlatch;
 	}

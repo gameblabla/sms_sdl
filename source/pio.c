@@ -113,6 +113,8 @@ void pio_reset(void)
   sms.sio.sctrl   = 0x00;
   input.analog[0][0] = 128;
   input.analog[0][1] = 96;
+  input.analog[1][0] = 128;
+  input.analog[1][1] = 96;
 
   /* SMS I/O power-on defaults */
   io_current = &io_lut[sms.territory][0xFF];

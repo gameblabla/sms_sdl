@@ -31,10 +31,9 @@
 */
 
 #include "shared.h"
+#include <ctype.h>
 
 uint8_t gaiden_hack = 0;
-
-#define GAME_DATABASE_CNT 106
 
 typedef struct
 {
@@ -49,7 +48,7 @@ typedef struct
 	const char *name;
 } rominfo_t;
 
-static rominfo_t game_list[GAME_DATABASE_CNT] =
+static rominfo_t game_list[] =
 {
 	/* Games requiring CODEMASTER mapper */
 	{0x29822980, 0, DEVICE_PAD2B, MAPPER_CODIES, DISPLAY_PAL, TERRITORY_EXPORT, CONSOLE_SMS2, FM_COMPATIBLE,
@@ -220,6 +219,10 @@ static rominfo_t game_list[GAME_DATABASE_CNT] =
 	{0xD6F43DDA, 1, DEVICE_PAD2B, MAPPER_SEGA, DISPLAY_NTSC, TERRITORY_EXPORT, CONSOLE_SMS2, FM_COMPATIBLE,
 	"Out Run 3-D"},
 
+	/* 3-D Gunner prototype: Light Phaser + 3-D glasses. */
+	{0x56DCB2D4, 1, DEVICE_LIGHTGUN, MAPPER_SEGA, DISPLAY_NTSC, TERRITORY_EXPORT, CONSOLE_SMS2, FM_COMPATIBLE,
+	"3-D Gunner [Proto]"},
+
 	/* Games requiring Light Phaser & 3D Glasses */
 	{0xFBE5CFBB, 1, DEVICE_LIGHTGUN, MAPPER_SEGA, DISPLAY_NTSC, TERRITORY_EXPORT, CONSOLE_SMS2, FM_COMPATIBLE,
 	"Missile Defense 3D"},
@@ -293,10 +296,48 @@ static rominfo_t game_list[GAME_DATABASE_CNT] =
 	"Great Baseball (Japan)"},
 	{0x316727DD, 0, DEVICE_PAD2B, MAPPER_SEGA, DISPLAY_NTSC, TERRITORY_DOMESTIC, CONSOLE_SMS, FM_NOT_COMPATIBLE,
 	"Teddy Boy Blues (Japan)"},
+
+
+	/* Wonder Kid Game Gear prototype.  Mapper details were supplied with the
+	 * prototype dump; Ben Sittler is credited by the dump notes for helping
+	 * reverse-engineer the single $8000 bank register behavior. */
+	{0x5E7B18C8, 0, DEVICE_PAD2B, MAPPER_WONDERKID, DISPLAY_NTSC, TERRITORY_EXPORT, CONSOLE_GGMS, FM_NOT_COMPATIBLE,
+	"Wonder Kid [Proto] [SMS-GG]"},
+
+	/* Broken-games-list fixes. */
+	{0xB289011D, 0, DEVICE_PAD2B, MAPPER_SEGA, DISPLAY_NTSC, TERRITORY_DOMESTIC, CONSOLE_GG, FM_NOT_COMPATIBLE,
+	"Madou Monogatari I (J)"},
 	
 };
 
-static void set_config()
+#define GAME_DATABASE_CNT ARRAY_SIZE(game_list)
+
+static int name_contains_ci(const char *s, const char *needle)
+{
+	char a[256];
+	char b[128];
+	size_t i;
+	if (!s || !needle) return 0;
+	for (i = 0; i + 1 < sizeof(a) && s[i]; i++) a[i] = (char)tolower((unsigned char)s[i]);
+	a[i] = 0;
+	for (i = 0; i + 1 < sizeof(b) && needle[i]; i++) b[i] = (char)tolower((unsigned char)needle[i]);
+	b[i] = 0;
+	return strstr(a, b) != NULL;
+}
+
+static int cart_uses_93c46(void)
+{
+	/* These Game Gear baseball cartridges use a 93C46 serial EEPROM.  The
+	 * filename fallback is intentional: old dumps/databases disagree on exact
+	 * CRCs and titles, while the affected game set is small and distinctive. */
+	if (name_contains_ci(option.game_name, "majors pro baseball")) return 1;
+	if (name_contains_ci(option.game_name, "nomo")) return 1;
+	if (name_contains_ci(option.game_name, "pro yakyuu gg league")) return 1;
+	if (name_contains_ci(option.game_name, "world series baseball")) return 1;
+	return 0;
+}
+
+void set_config()
 {
 	uint32_t i;
 
@@ -374,6 +415,12 @@ static void set_config()
 			
 			i = GAME_DATABASE_CNT;
 		}
+	}
+
+	if (cart_uses_93c46())
+	{
+		cart.mapper = MAPPER_93C46;
+		sms.console = CONSOLE_GG;
 	}
 
 	/* enable BIOS on SMS only */
@@ -459,6 +506,7 @@ void free_rom(void)
 
 uint32_t load_rom (char *filename)
 {
+	if (filename) snprintf(option.game_name, sizeof(option.game_name), "%s", filename);
 	free_rom();
 
 #ifndef NOZIP_SUPPORT

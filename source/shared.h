@@ -33,6 +33,7 @@
 
 #include "z80.h"
 #include "sms.h"
+#include "eeprom93c46.h"
 #include "pio.h"
 #include "memz80.h"
 #include "vdp.h"

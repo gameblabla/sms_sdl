@@ -38,6 +38,34 @@ input_t input;
 
 extern int32_t z80_cycle_count;
 
+static void lightgun_update_dpad_cursor(void)
+{
+	int32_t port;
+	int32_t max_y = (vdp.height > 0) ? (vdp.height - 1) : 191;
+	int32_t speed = option.lightgun_dpad_speed > 0 ? option.lightgun_dpad_speed : 3;
+
+	for (port = 0; port < 2; port++)
+	{
+		if (sms.device[port] != DEVICE_LIGHTGUN) continue;
+
+		int32_t x = input.analog[port][0];
+		int32_t y = input.analog[port][1];
+		int32_t step = (input.pad[port] & INPUT_BUTTON2) ? speed * 2 : speed;
+
+		if (input.pad[port] & INPUT_LEFT)  x -= step;
+		if (input.pad[port] & INPUT_RIGHT) x += step;
+		if (input.pad[port] & INPUT_UP)    y -= step;
+		if (input.pad[port] & INPUT_DOWN)  y += step;
+
+		if (x < 0) x = 0;
+		if (x > 255) x = 255;
+		if (y < 0) y = 0;
+		if (y > max_y) y = max_y;
+		input.analog[port][0] = x;
+		input.analog[port][1] = y;
+	}
+}
+
 /* Run the virtual console emulation for one frame */
 void system_frame(uint32_t skip_render)
 {
@@ -59,6 +87,9 @@ void system_frame(uint32_t skip_render)
 
 	/* Reset TMS Text offset counter */
 	text_counter = 0;
+
+	/* Light Phaser d-pad fallback for ports without mouse/touch input. */
+	lightgun_update_dpad_cursor();
 
 	/* 3D glasses faking */
 	if (sms.glasses_3d) skip_render = sms.wram[0x1ffb];
@@ -161,6 +192,7 @@ void system_reset(void)
 	render_reset();
 	SMSPLUS_sound_reset();
 	system_manage_sram(cart.sram, SLOT_CART, SRAM_LOAD);
+	if (cart.mapper == MAPPER_93C46) eeprom93c46_load_from_sram(cart.sram);
 }
 
 
@@ -172,5 +204,10 @@ void system_poweron(void)
 
 void system_poweroff(void)
 {
+	if (cart.mapper == MAPPER_93C46)
+	{
+		eeprom93c46_save_to_sram(cart.sram);
+		sms.save = 1;
+	}
 	system_manage_sram(cart.sram, SLOT_CART, SRAM_SAVE);
 }

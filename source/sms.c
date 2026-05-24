@@ -135,6 +135,87 @@ static void writemem_mapper_4pak(uint16_t offset, uint8_t data)
 }
 
 
+
+/*
+ * Wonder Kid Game Gear prototype mapper.
+ *
+ * Hardware notes supplied with the prototype dump, with Ben Sittler credited
+ * for reverse-engineering help: it is close to the Codemasters mapper but only
+ * has one bank register.  Writes to $8000 select the 16 KiB ROM bank visible at
+ * $8000-$BFFF.  The boot state is all-zero, so $0000-$3FFF, $4000-$7FFF and
+ * $8000-$BFFF all initially expose bank 0.
+ */
+static void mapper_wonderkid_bank_w(uint8_t data)
+{
+	uint_fast8_t i;
+	uint16_t page = data % slot.pages;
+
+	slot.fcr[3] = data;
+	for(i = 0x20; i <= 0x2F; i++)
+	{
+		cpu_readmap[i] = &slot.rom[(page << 14) | ((i & 0x0F) << 10)];
+		cpu_writemap[i] = dummy_write;
+	}
+}
+
+static void writemem_mapper_wonderkid(uint16_t offset, uint8_t data)
+{
+	if (offset == 0x8000)
+	{
+		mapper_wonderkid_bank_w(data);
+		return;
+	}
+
+	SMSPLUS_TRACE_MEM_WRITE(offset, data);
+	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
+}
+
+static uint8_t mapper_93c46_read(uint16_t address)
+{
+    if ((address & 0xF000) == 0x8000)
+    {
+        if (address == 0x8000) return eeprom93c46_read();
+        if (address >= 0x8008 && address < 0x8088) return eeprom93c46_direct_read(address);
+    }
+    return cpu_readmap[address >> 10][address & 0x03FF];
+}
+
+static void writemem_mapper_93c46(uint16_t offset, uint8_t data)
+{
+    SMSPLUS_TRACE_MEM_WRITE(offset, data);
+
+    if (offset == 0x8000)
+    {
+        eeprom93c46_write(data);
+        return;
+    }
+    if (offset >= 0x8008 && offset < 0x8088)
+    {
+        eeprom93c46_direct_write(offset, data);
+        return;
+    }
+    if (offset == 0xFFFC)
+    {
+        eeprom93c46_control_write(data);
+        return;
+    }
+    if (offset > 0xFFFC)
+    {
+        mapper_16k_w(offset & 3, data);
+        return;
+    }
+
+    cpu_writemap[offset >> 10][offset & 0x03FF] = data;
+}
+
+uint8_t sms_readmem16(uint16_t address)
+{
+    if (slot.mapper == MAPPER_93C46)
+        return mapper_93c46_read(address);
+    return cpu_readmap[address >> 10][address & 0x03FF];
+}
+
+
 void mapper_reset(void)
 {
 	switch(slot.mapper)
@@ -154,6 +235,12 @@ void mapper_reset(void)
 		case MAPPER_4PAK:
 			cpu_writemem16 = writemem_mapper_4pak;
 		break;
+		case MAPPER_93C46:
+			cpu_writemem16 = writemem_mapper_93c46;
+		break;
+		case MAPPER_WONDERKID:
+			cpu_writemem16 = writemem_mapper_wonderkid;
+		break;
 		default:
 			cpu_writemem16 = writemem_mapper_sega;
 		break;
@@ -163,6 +250,7 @@ void mapper_reset(void)
 void sms_init(void)
 {
 	CPUZ80_Init();
+	eeprom93c46_init();
 	/* Default: open bus */
 	data_bus_pullup   = 0x00;
 	data_bus_pulldown = 0x00;
@@ -271,6 +359,11 @@ void sms_reset(void)
   slot.pages    = cart.pages;
   slot.mapper   = cart.mapper;
   slot.fcr      = &cart.fcr[0];
+
+  if (cart.mapper == MAPPER_93C46)
+  {
+    eeprom93c46_reset();
+  }
 
   /* reset Memory Mapping */
   switch(sms.console)
@@ -432,10 +525,19 @@ void sms_reset(void)
       {
         case MAPPER_NONE:
         case MAPPER_SEGA:
+        case MAPPER_93C46:
           cart.fcr[0] = 0;
           cart.fcr[1] = 0;
           cart.fcr[2] = 1;
           cart.fcr[3] = 2;
+          break;
+
+        case MAPPER_WONDERKID:
+          /* This prototype's mapper powers up with every bank register at 0. */
+          cart.fcr[0] = 0;
+          cart.fcr[1] = 0;
+          cart.fcr[2] = 0;
+          cart.fcr[3] = 0;
           break;
 
         default:

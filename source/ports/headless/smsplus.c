@@ -13,7 +13,7 @@
 #define HEADLESS_BITMAP_HEIGHT 313
 
 t_config option;
-static uint16_t *headless_pixels;
+static void *headless_pixels;
 static const char *headless_sram_path;
 
 typedef struct cli_options
@@ -26,6 +26,9 @@ typedef struct cli_options
     uint8_t skip_render;
     uint8_t force_console;
     uint8_t quiet;
+    uint8_t force_lightgun;
+    int32_t lightgun_x;
+    int32_t lightgun_y;
     smsplus_headless_platform_options_t platform;
 } cli_options_t;
 
@@ -45,6 +48,13 @@ static void usage(const char *argv0)
         "  --coleco-bios PATH         ColecoVision BIOS file\n"
         "  --sram PATH                SRAM save/load path\n"
         "  --no-render                Execute without producing the internal video bitmap\n"
+        "  --lcd-persistence          Enable Game Gear LCD persistence filter (default)\n"
+        "  --no-lcd-persistence       Disable Game Gear LCD persistence filter\n"
+        "  --lightgun                 Force Light Phaser on port 1\n"
+        "  --lightgun-x N             Initial Light Phaser X coordinate (0..255)\n"
+        "  --lightgun-y N             Initial Light Phaser Y coordinate\n"
+        "  --lightgun-cursor          Draw software lightgun cursor in captures (default)\n"
+        "  --no-lightgun-cursor       Hide software lightgun cursor in captures\n"
         "\n"
         "Inspection options:\n"
         "  --input-playback PATH      Text input script: frame pad0 pad1 system [analog...]\n"
@@ -125,6 +135,8 @@ static int parse_cli(int argc, char **argv, cli_options_t *cli)
 {
     memset(cli, 0, sizeof(*cli));
     cli->frames = 300;
+    cli->lightgun_x = 128;
+    cli->lightgun_y = 96;
 
     for (int i = 1; i < argc; i++)
     {
@@ -162,6 +174,13 @@ static int parse_cli(int argc, char **argv, cli_options_t *cli)
         else if (!strcmp(a, "--screenshot-prefix")) { if (!need_value(argc, argv, &i)) return 0; cli->platform.screenshot_prefix = argv[i]; }
         else if (!strcmp(a, "--screenshot-every")) { uint64_t v; if (!need_value(argc, argv, &i) || !parse_u64_arg(argv[i], &v)) return 0; cli->platform.screenshot_every = (uint32_t)v; }
         else if (!strcmp(a, "--video-y4m")) { if (!need_value(argc, argv, &i)) return 0; cli->platform.video_y4m_path = argv[i]; }
+        else if (!strcmp(a, "--lcd-persistence")) option.lcd_persistence = 1;
+        else if (!strcmp(a, "--no-lcd-persistence")) option.lcd_persistence = 0;
+        else if (!strcmp(a, "--lightgun")) cli->force_lightgun = 1;
+        else if (!strcmp(a, "--lightgun-x")) { uint64_t v; if (!need_value(argc, argv, &i) || !parse_u64_arg(argv[i], &v)) return 0; cli->lightgun_x = (int32_t)v; }
+        else if (!strcmp(a, "--lightgun-y")) { uint64_t v; if (!need_value(argc, argv, &i) || !parse_u64_arg(argv[i], &v)) return 0; cli->lightgun_y = (int32_t)v; }
+        else if (!strcmp(a, "--lightgun-cursor")) option.lightgun_cursor = 1;
+        else if (!strcmp(a, "--no-lightgun-cursor")) option.lightgun_cursor = 0;
         else if (!strcmp(a, "--quiet")) { cli->quiet = 1; cli->platform.quiet = 1; }
         else if (a[0] == '-')
         {
@@ -198,6 +217,9 @@ static void defaults(void)
     option.nosound = 0;
     option.soundlevel = 1;
     option.use_bios = 1;
+    option.lcd_persistence = 1;
+    option.lightgun_cursor = 1;
+    option.lightgun_dpad_speed = 3;
 }
 
 static int load_exact(const char *path, uint8_t *dst, size_t dst_size, size_t min_size, size_t *actual)
@@ -300,13 +322,14 @@ void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
 
 static int init_bitmap(void)
 {
-    headless_pixels = calloc(HEADLESS_BITMAP_WIDTH * HEADLESS_BITMAP_HEIGHT, sizeof(uint16_t));
+    size_t bytes = (size_t)HEADLESS_BITMAP_WIDTH * HEADLESS_BITMAP_HEIGHT * SMSPLUS_RENDER_BYTES_PER_PIXEL;
+    headless_pixels = calloc(1, bytes);
     if (!headless_pixels) return 0;
     bitmap.width = HEADLESS_BITMAP_WIDTH;
     bitmap.height = HEADLESS_BITMAP_HEIGHT;
-    bitmap.depth = 16;
+    bitmap.depth = SMSPLUS_RENDER_DEPTH;
     bitmap.data = (uint8_t *)(void *)headless_pixels;
-    bitmap.pitch = HEADLESS_BITMAP_WIDTH * sizeof(uint16_t);
+    bitmap.pitch = HEADLESS_BITMAP_WIDTH * SMSPLUS_RENDER_BYTES_PER_PIXEL;
     bitmap.viewport.w = VIDEO_WIDTH_SMS;
     bitmap.viewport.h = VIDEO_HEIGHT_SMS;
     bitmap.viewport.x = 0;
@@ -355,6 +378,9 @@ int main(int argc, char **argv)
     }
 
     system_poweron();
+    if (cli.force_lightgun) sms.device[0] = DEVICE_LIGHTGUN;
+    input.analog[0][0] = cli.lightgun_x;
+    input.analog[0][1] = cli.lightgun_y;
 
     smsplus_headless_platform_t *platform = NULL;
     if (!smsplus_headless_platform_create(&platform, &cli.platform))

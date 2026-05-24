@@ -24,9 +24,13 @@ extern "C" {
 #include <string>
 #include <vector>
 
+#ifndef SDL_BUTTON_LMASK
+#define SDL_BUTTON_LMASK 0x01u
+#endif
+
 extern "C" { t_config option; }
 
-static uint16_t *g_pixels = nullptr;
+static void *g_pixels = nullptr;
 static std::string g_sram_path;
 static uint8_t g_m5_text_pulse[SORDM5_KEY_ROWS];
 
@@ -43,6 +47,10 @@ struct UiSettings
     bool show_menu = true;
     bool show_keyboard = false;
     bool audio = true;
+    bool force_lightgun = false;
+    bool db_lightgun = false;
+    bool mouse_lightgun = true;
+    bool show_lightgun_cursor = true;
     int browser_index = 0;
     std::filesystem::path browser_dir = std::filesystem::current_path();
 };
@@ -163,6 +171,9 @@ static void set_defaults()
     option.nosound = 0;
     option.soundlevel = 1;
     option.use_bios = 1;
+    option.lcd_persistence = 1;
+    option.lightgun_cursor = 1;
+    option.lightgun_dpad_speed = 3;
 }
 
 static const char *ext_of(const std::string &path)
@@ -227,13 +238,13 @@ static bool init_bios(const AppState &app)
 static bool init_bitmap()
 {
     if (!g_pixels)
-        g_pixels = static_cast<uint16_t *>(std::calloc(BITMAP_W * BITMAP_H, sizeof(uint16_t)));
+        g_pixels = std::calloc(static_cast<size_t>(BITMAP_W) * BITMAP_H, SMSPLUS_RENDER_BYTES_PER_PIXEL);
     if (!g_pixels) return false;
     bitmap.width = BITMAP_W;
     bitmap.height = BITMAP_H;
-    bitmap.depth = 16;
+    bitmap.depth = SMSPLUS_RENDER_DEPTH;
     bitmap.data = reinterpret_cast<uint8_t *>(g_pixels);
-    bitmap.pitch = BITMAP_W * sizeof(uint16_t);
+    bitmap.pitch = BITMAP_W * SMSPLUS_RENDER_BYTES_PER_PIXEL;
     bitmap.viewport.w = VIDEO_WIDTH_SMS;
     bitmap.viewport.h = VIDEO_HEIGHT_SMS;
     bitmap.viewport.x = 0;
@@ -300,6 +311,8 @@ static bool load_game(AppState &app, const std::string &path)
         return false;
     }
     system_poweron();
+    app.ui.db_lightgun = (sms.device[0] == DEVICE_LIGHTGUN);
+    if (app.ui.force_lightgun) sms.device[0] = DEVICE_LIGHTGUN;
     app.rom_path = path;
     app.rom_loaded = true;
     app.paused = false;
@@ -410,6 +423,64 @@ static void update_keyboard_state_from_bindings()
     }
 }
 
+static SDL_FRect compute_dest_rect(const UiSettings &ui, int active_w, int active_h, int win_w, int win_h);
+
+static bool lightgun_active()
+{
+    return sms.device[0] == DEVICE_LIGHTGUN || sms.device[1] == DEVICE_LIGHTGUN;
+}
+
+static int lightgun_port()
+{
+    if (sms.device[0] == DEVICE_LIGHTGUN) return 0;
+    if (sms.device[1] == DEVICE_LIGHTGUN) return 1;
+    return 0;
+}
+
+static void set_lightgun_trigger(int port, bool down)
+{
+    if (down) input.pad[port] |= INPUT_BUTTON1;
+    else input.pad[port] &= static_cast<uint8_t>(~INPUT_BUTTON1);
+}
+
+static bool window_point_to_lightgun(AppState &app, float wx, float wy, bool trigger)
+{
+    if (!app.rom_loaded || !lightgun_active()) return false;
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(app.window, &win_w, &win_h);
+    int active_w = bitmap.viewport.w > 0 ? bitmap.viewport.w : 256;
+    int active_h = bitmap.viewport.h > 0 ? bitmap.viewport.h : vdp.height;
+    SDL_FRect dst = compute_dest_rect(app.ui, active_w, active_h, win_w, win_h);
+    if (dst.w <= 0.0f || dst.h <= 0.0f) return false;
+    if (wx < dst.x || wy < dst.y || wx >= dst.x + dst.w || wy >= dst.y + dst.h)
+    {
+        set_lightgun_trigger(lightgun_port(), trigger);
+        return false;
+    }
+
+    int port = lightgun_port();
+    float nx = (wx - dst.x) / dst.w;
+    float ny = (wy - dst.y) / dst.h;
+    int x = static_cast<int>(nx * active_w + 0.5f);
+    int y = static_cast<int>(ny * active_h + 0.5f);
+    if (x < 0) x = 0;
+    if (x > 255) x = 255;
+    if (y < 0) y = 0;
+    if (y >= active_h) y = active_h - 1;
+    input.analog[port][0] = x;
+    input.analog[port][1] = y;
+    set_lightgun_trigger(port, trigger);
+    return true;
+}
+
+static void update_lightgun_mouse(AppState &app)
+{
+    if (!app.ui.mouse_lightgun || !app.rom_loaded || !lightgun_active()) return;
+    float mx = 0.0f, my = 0.0f;
+    uint32_t buttons = static_cast<uint32_t>(SDL_GetMouseState(&mx, &my));
+    window_point_to_lightgun(app, mx, my, (buttons & SDL_BUTTON_LMASK) != 0);
+}
+
 static void open_first_gamepad(AppState &app)
 {
     int count = 0;
@@ -459,7 +530,13 @@ static void parse_args(AppState &app, int argc, char **argv)
         else if (!std::strcmp(a, "--stretch")) { app.ui.stretch = true; app.ui.keep_aspect = false; app.ui.pixel_perfect = false; }
         else if (!std::strcmp(a, "--linear")) app.ui.linear_filter = true;
         else if (!std::strcmp(a, "--nearest") || !std::strcmp(a, "--pixel-perfect")) { app.ui.linear_filter = false; app.ui.pixel_perfect = true; }
+        else if (!std::strcmp(a, "--lcd-persistence")) option.lcd_persistence = 1;
+        else if (!std::strcmp(a, "--no-lcd-persistence")) option.lcd_persistence = 0;
         else if (!std::strcmp(a, "--no-audio")) app.ui.audio = false;
+        else if (!std::strcmp(a, "--lightgun")) app.ui.force_lightgun = true;
+        else if (!std::strcmp(a, "--no-mouse-lightgun")) app.ui.mouse_lightgun = false;
+        else if (!std::strcmp(a, "--lightgun-cursor")) { app.ui.show_lightgun_cursor = true; option.lightgun_cursor = 1; }
+        else if (!std::strcmp(a, "--no-lightgun-cursor")) { app.ui.show_lightgun_cursor = false; option.lightgun_cursor = 0; }
         else if (!std::strcmp(a, "--hide-menu")) app.ui.show_menu = false;
         else if (a[0] != '-') app.rom_path = a;
     }
@@ -481,6 +558,20 @@ static SDL_FRect compute_dest_rect(const UiSettings &ui, int active_w, int activ
     return dst;
 }
 
+static void draw_lightgun_cursor_overlay(AppState &app, const SDL_FRect &dst, int active_w, int active_h)
+{
+    if (!app.ui.show_lightgun_cursor || !lightgun_active()) return;
+    int port = lightgun_port();
+    float x = dst.x + (static_cast<float>(input.analog[port][0]) / static_cast<float>(active_w)) * dst.w;
+    float y = dst.y + (static_cast<float>(input.analog[port][1]) / static_cast<float>(active_h)) * dst.h;
+    SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 255);
+    SDL_RenderLine(app.renderer, x - 9.0f, y - 1.0f, x + 9.0f, y - 1.0f);
+    SDL_RenderLine(app.renderer, x - 1.0f, y - 9.0f, x - 1.0f, y + 9.0f);
+    SDL_SetRenderDrawColor(app.renderer, 255, 255, 255, 255);
+    SDL_RenderLine(app.renderer, x - 8.0f, y, x + 8.0f, y);
+    SDL_RenderLine(app.renderer, x, y - 8.0f, x, y + 8.0f);
+}
+
 static void render_core(AppState &app)
 {
     SDL_SetTextureScaleMode(app.texture, app.ui.linear_filter ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
@@ -495,6 +586,7 @@ static void render_core(AppState &app)
     SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 255);
     SDL_RenderClear(app.renderer);
     SDL_RenderTexture(app.renderer, app.texture, &src, &dst);
+    draw_lightgun_cursor_overlay(app, dst, active_w, active_h);
 }
 
 static std::vector<std::filesystem::directory_entry> list_browser(const std::filesystem::path &dir)
@@ -553,6 +645,25 @@ static void draw_controls(AppState &app)
         ImGui::PopID();
     }
     ImGui::TextWrapped("M5 keyboard is direct: PC number keys 1/2 drive the M5 rows used by Pooyan. Text events are also accepted so non-QWERTY layouts can enter logical characters.");
+    ImGui::Separator();
+    ImGui::TextUnformatted("Light Phaser");
+    bool force = app.ui.force_lightgun;
+    if (ImGui::Checkbox("Force Light Phaser on port 1", &force))
+    {
+        app.ui.force_lightgun = force;
+        if (app.rom_loaded)
+            sms.device[0] = (app.ui.force_lightgun || app.ui.db_lightgun) ? DEVICE_LIGHTGUN : DEVICE_PAD2B;
+    }
+    if (ImGui::Checkbox("Mouse aims Light Phaser", &app.ui.mouse_lightgun)) {}
+    bool cursor = app.ui.show_lightgun_cursor;
+    if (ImGui::Checkbox("Show on-screen cursor", &cursor))
+    {
+        app.ui.show_lightgun_cursor = cursor;
+        option.lightgun_cursor = cursor ? 1 : 0;
+    }
+    ImGui::Text("Detected: %s  X:%d Y:%d Trigger:%s", lightgun_active() ? "yes" : "no",
+                input.analog[lightgun_port()][0], input.analog[lightgun_port()][1],
+                (input.pad[lightgun_port()] & INPUT_BUTTON1) ? "down" : "up");
 }
 
 static void draw_virtual_keyboard(AppState &app)
@@ -594,6 +705,8 @@ static void draw_menu(AppState &app)
             ImGui::Checkbox("Stretch", &app.ui.stretch);
             ImGui::Checkbox("Pixel perfect", &app.ui.pixel_perfect);
             ImGui::Checkbox("Linear filtering", &app.ui.linear_filter);
+            bool lcd = option.lcd_persistence != 0;
+            if (ImGui::Checkbox("Game Gear LCD persistence", &lcd)) option.lcd_persistence = lcd ? 1 : 0;
             if (ImGui::Checkbox("Fullscreen", &app.ui.fullscreen))
                 SDL_SetWindowFullscreen(app.window, app.ui.fullscreen);
             ImGui::Text("Active viewport: %d x %d", bitmap.viewport.w, bitmap.viewport.h);
@@ -662,6 +775,18 @@ static void handle_event(AppState &app, const SDL_Event &e)
         case SDL_EVENT_TEXT_INPUT:
             m5_key_from_text(e.text.text);
             break;
+#if defined(SDL_EVENT_FINGER_DOWN) && defined(SDL_EVENT_FINGER_MOTION) && defined(SDL_EVENT_FINGER_UP)
+        case SDL_EVENT_FINGER_DOWN:
+        case SDL_EVENT_FINGER_MOTION:
+        case SDL_EVENT_FINGER_UP:
+        {
+            int win_w = 0, win_h = 0;
+            SDL_GetWindowSize(app.window, &win_w, &win_h);
+            bool down = e.type != SDL_EVENT_FINGER_UP;
+            window_point_to_lightgun(app, e.tfinger.x * static_cast<float>(win_w), e.tfinger.y * static_cast<float>(win_h), down);
+            break;
+        }
+#endif
         case SDL_EVENT_GAMEPAD_ADDED:
             if (!app.gamepad) app.gamepad = SDL_OpenGamepad(e.gdevice.which);
             break;
@@ -704,7 +829,18 @@ static bool init_sdl(AppState &app)
     if (!app.window) return false;
     app.renderer = SDL_CreateRenderer(app.window, nullptr);
     if (!app.renderer) return false;
+    #ifdef SMSPLUS_RENDER_32BPP
+#if defined(SDL_PIXELFORMAT_XRGB8888)
+    app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, BITMAP_W, BITMAP_H);
+#elif defined(SDL_PIXELFORMAT_ARGB8888)
+    app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, BITMAP_W, BITMAP_H);
+#else
+    /* Fake/minimal SDL3 headers used by CI may not expose 32 bpp formats. */
     app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, BITMAP_W, BITMAP_H);
+#endif
+#else
+    app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, BITMAP_W, BITMAP_H);
+#endif
     if (!app.texture) return false;
     SDL_SetTextureScaleMode(app.texture, SDL_SCALEMODE_NEAREST);
     if (app.ui.fullscreen) SDL_SetWindowFullscreen(app.window, true);
@@ -775,6 +911,7 @@ int main(int argc, char **argv)
         while (SDL_PollEvent(&e)) handle_event(app, e);
         update_keyboard_state_from_bindings();
         update_virtual_keyboard_gamepad(app);
+        update_lightgun_mouse(app);
 
         if (app.rom_loaded && !app.paused)
         {

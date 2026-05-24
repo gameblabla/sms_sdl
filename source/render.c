@@ -64,7 +64,21 @@ uint16_t bg_list_index;           /* # of modified patterns in list */
 #ifndef _8BPP_COLOR
 static uint8_t internal_buffer[0x200];
 /* Precalculated pixel table */
+#ifdef SMSPLUS_RENDER_32BPP
+static uint32_t pixel[PALETTE_SIZE];
+#else
 static uint16_t pixel[PALETTE_SIZE];
+#ifndef SMSPLUS_DISABLE_FAST_REMAP
+/*
+ * Fast RGB565 remap table.  The renderer internally draws palette indices
+ * into internal_buffer; this table converts two adjacent 8-bit indices to two
+ * packed RGB565 pixels with a single 32-bit write.  It costs 256 KiB and is
+ * only rebuilt after palette changes.
+ */
+static uint32_t remap16_pair_table[0x10000];
+static uint8_t remap16_pair_dirty = 1;
+#endif
+#endif
 #endif
 
 static uint8_t bg_pattern_cache[0x20000];/* Cached and flipped patterns */
@@ -87,6 +101,35 @@ static uint16_t active_range[2] =
 	243, /* NTSC VDP */
 	294  /* PAL  VDP */
 };
+
+#define LCD_PERSISTENCE_MAX_PIXELS (256 * 313)
+static uint32_t lcd_persistence_buffer[LCD_PERSISTENCE_MAX_PIXELS];
+static uint8_t lcd_persistence_valid[LCD_PERSISTENCE_MAX_PIXELS];
+
+#ifndef SMSPLUS_RENDER_32BPP
+static uint16_t lcd_blend_rgb565(uint16_t cur, uint16_t prev)
+{
+	/* Game Gear LCD persistence approximation: 75% current frame, 25% previous
+	 * displayed frame.  It preserves RGB565 channel widths and creates the
+	 * intended flicker integration for titles that rely on the handheld panel. */
+	uint32_t cr = (cur >> 11) & 0x1f, cg = (cur >> 5) & 0x3f, cb = cur & 0x1f;
+	uint32_t pr = (prev >> 11) & 0x1f, pg = (prev >> 5) & 0x3f, pb = prev & 0x1f;
+	uint32_t r = (cr * 3 + pr + 2) >> 2;
+	uint32_t g = (cg * 3 + pg + 2) >> 2;
+	uint32_t b = (cb * 3 + pb + 2) >> 2;
+	return (uint16_t)((r << 11) | (g << 5) | b);
+}
+#else
+static uint32_t lcd_blend_xrgb8888(uint32_t cur, uint32_t prev)
+{
+	uint32_t cr = (cur >> 16) & 0xff, cg = (cur >> 8) & 0xff, cb = cur & 0xff;
+	uint32_t pr = (prev >> 16) & 0xff, pg = (prev >> 8) & 0xff, pb = prev & 0xff;
+	uint32_t r = (cr * 3 + pr + 2) >> 2;
+	uint32_t g = (cg * 3 + pg + 2) >> 2;
+	uint32_t b = (cb * 3 + pb + 2) >> 2;
+	return 0xFF000000u | (r << 16) | (g << 8) | b;
+}
+#endif
 
 /* CRAM palette in TMS compatibility mode */
 static const uint8_t tms_crom[] =
@@ -168,7 +211,11 @@ static uint32_t bp_lut[0x10000];
 static void parse_satb(int32_t line);
 static void update_bg_pattern_cache(void);
 #ifndef _8BPP_COLOR
+#ifdef SMSPLUS_RENDER_32BPP
+static void remap_8_to_32(int32_t line);
+#else
 static void remap_8_to_16(int32_t line);
+#endif
 #endif
 
 /* Macros to access memory 32-bits at a time (from MAME's drawgfx.c) */
@@ -177,7 +224,7 @@ static void remap_8_to_16(int32_t line);
 
 static __inline__ uint32_t read_dword(void *address)
 {
-  if ((uint32_t)address & 3)
+  if ((uintptr_t)address & 3)
   {
 #ifdef LSB_FIRST  /* little endian version */
     return ( *((uint8_t *)address) +
@@ -198,7 +245,7 @@ static __inline__ uint32_t read_dword(void *address)
 
 static __inline__ void write_dword(void *address, uint32_t data)
 {
-  if ((uint32_t)address & 3)
+  if ((uintptr_t)address & 3)
   {
 #ifdef LSB_FIRST
     *((uint8_t *)address) =  data;
@@ -328,6 +375,8 @@ void render_reset(void)
 
 	/* Clear display bitmap */
 	memset(bitmap.data, 0, bitmap.pitch * bitmap.height);
+	memset(lcd_persistence_buffer, 0, sizeof(lcd_persistence_buffer));
+	memset(lcd_persistence_valid, 0, sizeof(lcd_persistence_valid));
 
 	/* Clear palette */
 	for(i = 0; i < PALETTE_SIZE; i++)
@@ -443,34 +492,17 @@ void render_line(int32_t line)
 	else
 		parse_line(line);
 
-	/* LightGun mark */
-	#ifdef LIGHTGUN_ENABLED
-	/* Putting this in an ifdef because the condition loop is executed every render_line */
-	if (sms.device[0] == DEVICE_LIGHTGUN)
-	{
-		int32_t dy = vdp.line - input.analog[0][1];
-		if (abs(dy) < 6)
-		{
-			int32_t i;
-			int32_t start = input.analog[0][0] - 4;
-			int32_t end = input.analog[0][0] + 4;
-			if (start < 0) start = 0;
-			if (end > 255) end = 255;
-			for (i=start; i<end+1; i++)
-			{
-				linebuf[i] = 0xFF;
-			}
-		}
-	}
-	#endif
-	
 	/* Only draw lines within the video output range ! */
 	if (view)
 	{
 		/* adjust output line */
 		vline -= top_border;
 		#ifndef _8BPP_COLOR
+		#ifdef SMSPLUS_RENDER_32BPP
+		remap_8_to_32(vline);
+		#else
 		remap_8_to_16(vline);
+		#endif
 		#endif
 	}
 }
@@ -739,6 +771,11 @@ void palette_sync(int32_t index)
 	bitmap.pal.dirty[index] = bitmap.pal.update = 1;
 	#else
 	pixel[index] = MAKE_PIXEL(r, g, b);
+#ifndef SMSPLUS_RENDER_32BPP
+#ifndef SMSPLUS_DISABLE_FAST_REMAP
+	remap16_pair_dirty = 1;
+#endif
+#endif
 	#endif
 }
 
@@ -849,20 +886,171 @@ static void update_bg_pattern_cache(void)
 	bg_list_index = 0;
 }
 
+static int32_t lightgun_cursor_port(void)
+{
+	if (!option.lightgun_cursor) return -1;
+	if (sms.device[0] == DEVICE_LIGHTGUN) return 0;
+	if (sms.device[1] == DEVICE_LIGHTGUN) return 1;
+	return -1;
+}
+
+static int32_t lightgun_cursor_line_info(int32_t line, int32_t *x_out, int32_t *dy_out)
+{
+	int32_t port = lightgun_cursor_port();
+	if (port < 0) return 0;
+	int32_t x = input.analog[port][0];
+	int32_t y = input.analog[port][1];
+	int32_t dy = line - y;
+	if (x < 0) x = 0;
+	if (x > 255) x = 255;
+	if (dy < -7 || dy > 7) return 0;
+	*x_out = x;
+	*dy_out = dy;
+	return 1;
+}
+
+#ifndef SMSPLUS_RENDER_32BPP
+static void draw_lightgun_cursor_16(uint16_t *p, int32_t width, int32_t line)
+{
+	int32_t x, dy, i;
+	uint16_t white = MAKE_PIXEL(255, 255, 255);
+	uint16_t black = MAKE_PIXEL(0, 0, 0);
+	if (!lightgun_cursor_line_info(line, &x, &dy)) return;
+	if (dy == 0 || dy == -1 || dy == 1)
+	{
+		for (i = x - 8; i <= x + 8; i++)
+			if (i >= 0 && i < width) p[i] = (dy == 0) ? white : black;
+	}
+	if (x >= 0 && x < width) p[x] = white;
+	if (x - 1 >= 0 && x - 1 < width) p[x - 1] = black;
+	if (x + 1 >= 0 && x + 1 < width) p[x + 1] = black;
+}
+#else
+static void draw_lightgun_cursor_32(uint32_t *p, int32_t width, int32_t line)
+{
+	int32_t x, dy, i;
+	uint32_t white = MAKE_PIXEL(255, 255, 255);
+	uint32_t black = MAKE_PIXEL(0, 0, 0);
+	if (!lightgun_cursor_line_info(line, &x, &dy)) return;
+	if (dy == 0 || dy == -1 || dy == 1)
+	{
+		for (i = x - 8; i <= x + 8; i++)
+			if (i >= 0 && i < width) p[i] = (dy == 0) ? white : black;
+	}
+	if (x >= 0 && x < width) p[x] = white;
+	if (x - 1 >= 0 && x - 1 < width) p[x - 1] = black;
+	if (x + 1 >= 0 && x + 1 < width) p[x + 1] = black;
+}
+#endif
+
 #ifndef _8BPP_COLOR
+#ifndef SMSPLUS_RENDER_32BPP
+#ifndef SMSPLUS_DISABLE_FAST_REMAP
+static void rebuild_remap16_pair_table(void)
+{
+	uint32_t a, b;
+	for (a = 0; a < 0x100; a++)
+	{
+		uint16_t pa = pixel[a & PIXEL_MASK];
+		for (b = 0; b < 0x100; b++)
+		{
+			uint16_t pb = pixel[b & PIXEL_MASK];
+#ifdef LSB_FIRST
+			remap16_pair_table[a | (b << 8)] = (uint32_t)pa | ((uint32_t)pb << 16);
+#else
+			remap16_pair_table[a | (b << 8)] = ((uint32_t)pa << 16) | (uint32_t)pb;
+#endif
+		}
+	}
+	remap16_pair_dirty = 0;
+}
+#endif
+
 static void remap_8_to_16(int32_t line)
 {
 	int32_t i;
+	uint8_t *src = internal_buffer;
 	uint16_t *p = (uint16_t *)&bitmap.data[(line * bitmap.pitch)];
-	int32_t width = (bitmap.viewport.w)+2 * bitmap.viewport.x;
+	int32_t width = (bitmap.viewport.w) + 2 * bitmap.viewport.x;
 	
 	LOCK_VIDEO
 
-	for(i = 0; i < width; i++)
+	if ((sms.console == CONSOLE_GG) && option.lcd_persistence)
 	{
-		p[i] = pixel[ internal_buffer[i] & PIXEL_MASK ];
+		uint32_t pitch_pixels = bitmap.pitch >> 1;
+		for(i = 0; i < width; i++)
+		{
+			uint16_t out = pixel[src[i] & PIXEL_MASK];
+			uint32_t idx = (uint32_t)line * pitch_pixels + (uint32_t)i;
+			if (idx < LCD_PERSISTENCE_MAX_PIXELS)
+			{
+				if (lcd_persistence_valid[idx])
+					out = lcd_blend_rgb565(out, (uint16_t)lcd_persistence_buffer[idx]);
+				lcd_persistence_buffer[idx] = out;
+				lcd_persistence_valid[idx] = 1;
+			}
+			p[i] = out;
+		}
 	}
+	else
+	{
+#ifndef SMSPLUS_DISABLE_FAST_REMAP
+		uint32_t *dst32 = (uint32_t *)(void *)p;
+		int32_t pairs = width >> 1;
+		if (remap16_pair_dirty) rebuild_remap16_pair_table();
+		for (i = 0; i < pairs; i++)
+		{
+			uint32_t key = (uint32_t)src[(i << 1) + 0] | ((uint32_t)src[(i << 1) + 1] << 8);
+			write_dword(&dst32[i], remap16_pair_table[key]);
+		}
+		if (width & 1)
+			p[width - 1] = pixel[src[width - 1] & PIXEL_MASK];
+#else
+		for(i = 0; i < width; i++)
+			p[i] = pixel[src[i] & PIXEL_MASK];
+#endif
+	}
+
+	draw_lightgun_cursor_16(p, width, line);
 	
 	UNLOCK_VIDEO
 }
+#else
+static void remap_8_to_32(int32_t line)
+{
+	int32_t i;
+	uint8_t *src = internal_buffer;
+	uint32_t *p = (uint32_t *)&bitmap.data[(line * bitmap.pitch)];
+	int32_t width = (bitmap.viewport.w) + 2 * bitmap.viewport.x;
+	
+	LOCK_VIDEO
+
+	if ((sms.console == CONSOLE_GG) && option.lcd_persistence)
+	{
+		uint32_t pitch_pixels = bitmap.pitch >> 2;
+		for(i = 0; i < width; i++)
+		{
+			uint32_t out = pixel[src[i] & PIXEL_MASK];
+			uint32_t idx = (uint32_t)line * pitch_pixels + (uint32_t)i;
+			if (idx < LCD_PERSISTENCE_MAX_PIXELS)
+			{
+				if (lcd_persistence_valid[idx])
+					out = lcd_blend_xrgb8888(out, lcd_persistence_buffer[idx]);
+				lcd_persistence_buffer[idx] = out;
+				lcd_persistence_valid[idx] = 1;
+			}
+			p[i] = out;
+		}
+	}
+	else
+	{
+		for(i = 0; i < width; i++)
+			p[i] = pixel[src[i] & PIXEL_MASK];
+	}
+
+	draw_lightgun_cursor_32(p, width, line);
+	
+	UNLOCK_VIDEO
+}
+#endif
 #endif

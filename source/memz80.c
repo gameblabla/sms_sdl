@@ -30,6 +30,14 @@
 */
 
 #include "shared.h"
+/*
+ * Sord M5 CTC/IO behavior notes:
+ * The lightweight CTC and keyboard/port model added for Sord M5 compatibility
+ * follows MAME's src/mame/sord/m5.cpp hardware mapping and behavior, but is
+ * an independent, reduced implementation for SMS Plus GX rather than copied
+ * MAME device code.
+ */
+
 
 /* Pull-up resistors on data bus */
 uint8_t data_bus_pullup = 0x00;

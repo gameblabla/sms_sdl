@@ -12,6 +12,8 @@ Z80_CORE = z80
 SCALE2X_UPSCALER = 1
 PROFILE = 0
 ZIP_SUPPORT = 1
+# Set RENDER_BPP=32 for native XRGB8888 output in modern ports.
+RENDER_BPP ?= 16
 
 SRCDIR		= ./source ./source/cpu_cores/$(Z80_CORE) ./source/sound ./source/unzip
 SRCDIR		+= ./source/scalers ./source/ports/$(PORT) ./source/sound/$(SOUND_ENGINE) ./source/sound_output/$(SOUND_OUTPUT)
@@ -45,6 +47,10 @@ endif
 
 ifeq ($(ZIP_SUPPORT), 0)
 CFLAGS 		+= -DNOZIP_SUPPORT
+endif
+
+ifeq ($(RENDER_BPP), 32)
+CFLAGS 		+= -DSMSPLUS_RENDER_32BPP
 endif
 
 ifeq ($(SCALE2X_UPSCALER), 1)

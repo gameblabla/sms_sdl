@@ -17,6 +17,9 @@ typedef struct {
 	int32_t spritelimit;
 	int32_t extra_gg;
 	int32_t tms_pal;
+	int32_t lcd_persistence; /* Game Gear LCD persistence filter */
+	int32_t lightgun_cursor; /* Draw a software cursor for Light Phaser games */
+	int32_t lightgun_dpad_speed; /* Pixels per frame for d-pad cursor fallback */
 	char game_name[0x100];
 	uint8_t use_bios;
 	uint8_t soundlevel;

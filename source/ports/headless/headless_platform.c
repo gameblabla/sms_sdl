@@ -39,17 +39,28 @@ static uint8_t clamp_u8(int32_t v)
     return (uint8_t)v;
 }
 
-static uint16_t read_pixel565(uint32_t x, uint32_t y)
+static uint32_t read_native_pixel(uint32_t x, uint32_t y)
 {
     if (!bitmap.data || x >= bitmap.width || y >= bitmap.height) return 0;
+    if (bitmap.depth == 32)
+        return ((const uint32_t *)(const void *)(bitmap.data + y * bitmap.pitch))[x];
     return ((const uint16_t *)(const void *)(bitmap.data + y * bitmap.pitch))[x];
 }
 
-static void pixel_to_rgb(uint16_t p, uint8_t *r, uint8_t *g, uint8_t *b)
+static void pixel_to_rgb(uint32_t p, uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    *r = (uint8_t)((((p >> 11) & 0x1F) * 255) / 31);
-    *g = (uint8_t)((((p >> 5) & 0x3F) * 255) / 63);
-    *b = (uint8_t)(((p & 0x1F) * 255) / 31);
+    if (bitmap.depth == 32)
+    {
+        *r = (uint8_t)((p >> 16) & 0xff);
+        *g = (uint8_t)((p >> 8) & 0xff);
+        *b = (uint8_t)(p & 0xff);
+    }
+    else
+    {
+        *r = (uint8_t)((((p >> 11) & 0x1F) * 255) / 31);
+        *g = (uint8_t)((((p >> 5) & 0x3F) * 255) / 63);
+        *b = (uint8_t)(((p & 0x1F) * 255) / 31);
+    }
 }
 
 static int write_file_bytes(const char *path, const void *data, size_t size)
@@ -80,7 +91,7 @@ static int save_ppm(const char *path)
         for (uint32_t x = 0; x < w; x++)
         {
             uint8_t rgb[3];
-            uint16_t p = read_pixel565(x0 + x, y);
+            uint32_t p = read_native_pixel(x0 + x, y);
             pixel_to_rgb(p, &rgb[0], &rgb[1], &rgb[2]);
             fwrite(rgb, 1, sizeof(rgb), fp);
         }
@@ -176,7 +187,7 @@ static int y4m_write_frame(smsplus_headless_platform_t *p)
             uint8_t r = 0, g = 0, b = 0;
             if (xx < active_w && yy < active_h)
             {
-                uint16_t pix = read_pixel565(x0 + xx, yy);
+                uint32_t pix = read_native_pixel(x0 + xx, yy);
                 pixel_to_rgb(pix, &r, &g, &b);
             }
             yuv_from_rgb(r, g, b, &ybuf[yy * p->video_w + xx], &ubuf[yy * p->video_w + xx], &vbuf[yy * p->video_w + xx]);
@@ -323,11 +334,12 @@ static int dump_state(const char *prefix)
     FILE *fp = fopen(path, "wb");
     if (!fp) return 0;
     fprintf(fp,
-            "console=%u display=%u territory=%u\n"
+            "console=%u display=%u territory=%u device0=%u device1=%u lightgun_xy0=%d,%d lightgun_xy1=%d,%d\n"
             "pc=%04X sp=%04X af=%04X bc=%04X de=%04X hl=%04X ix=%04X iy=%04X wz=%04X\n"
             "i=%02X r=%02X iff1=%u iff2=%u im=%u halt=%u cycles=%d line=%d\n"
             "vdp_mode=%u vdp_height=%u vdp_lpf=%u vdp_status=%02X vdp_addr=%04X vdp_code=%u\n",
-            sms.console, sms.display, sms.territory,
+            sms.console, sms.display, sms.territory, sms.device[0], sms.device[1],
+            input.analog[0][0], input.analog[0][1], input.analog[1][0], input.analog[1][1],
             Z80.pc.w.l, Z80.sp.w.l, Z80.af.w.l, Z80.bc.w.l, Z80.de.w.l,
             Z80.hl.w.l, Z80.ix.w.l, Z80.iy.w.l, Z80.wz.w.l,
             Z80.i, (uint8_t)((Z80.r & 0x7f) | (Z80.r2 & 0x80)), Z80.iff1, Z80.iff2,

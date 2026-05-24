@@ -4,6 +4,14 @@
  * Compact C backend for SMS Plus GX when MAME_PSG is enabled.  This follows
  * current MAME sn76496_base_device semantics for the variants used here:
  * Sega VDP PSG, Game Gear PSG, TI SN76489, and SN76489A-style PSG.
+ *
+ * Based on behavior and structure from MAME's sn76496.cpp.
+ * MAME source license: BSD-3-Clause
+ * copyright-holders:Nicola Salmoria, with contributions by Lord Nightmare,
+ * Michael Zapf, ValleyBell, Qbix, NewRisingSun, and other MAME contributors.
+ *
+ * This C adaptation and SMS Plus GX integration:
+ * Copyright (C) 2026 SMS Plus GX contributors.
  */
 
 #include <stdint.h>
@@ -260,7 +268,7 @@ static void advance_to_output_sample(void)
 void SN76489_Update(int16_t **outputs, int samples)
 {
     int16_t *lbuffer = outputs[0];
-    int16_t *rbuffer = PSG.m_stereo ? outputs[1] : outputs[0];
+    int16_t *rbuffer = outputs[1] ? outputs[1] : outputs[0];
 
     while (samples-- > 0)
     {
@@ -297,7 +305,6 @@ void SN76489_Update(int16_t **outputs, int samples)
         }
 
         *(lbuffer++) = (int16_t)out;
-        if (PSG.m_stereo)
-            *(rbuffer++) = (int16_t)out2;
+        *(rbuffer++) = (int16_t)out2;
     }
 }

@@ -1,3 +1,11 @@
+/*
+ * Public interface for the SMS Plus GX MAME-derived SN76489 backend.
+ *
+ * Based on MAME sn76496.cpp behavior. MAME source license: BSD-3-Clause;
+ * copyright-holders include Nicola Salmoria and later MAME contributors.
+ * SMS Plus GX integration Copyright (C) 2026 SMS Plus GX contributors.
+ */
+
 #ifndef SN76489_DEFINE
 #define SN76489_DEFINE
 

@@ -2,12 +2,18 @@ PRGNAME     = sms_headless
 CC          = gcc
 SOUND_ENGINE ?= mame_sn76489
 Z80_CORE ?= z80
+RENDER_BPP ?= 32
 
 PSG_DEFS :=
+RENDER_DEFS :=
 ifeq ($(SOUND_ENGINE),mame_sn76489)
 PSG_DEFS += -DMAME_PSG
 else ifeq ($(SOUND_ENGINE),maxim_sn76489)
 PSG_DEFS += -DMAXIM_PSG
+endif
+
+ifeq ($(RENDER_BPP),32)
+RENDER_DEFS += -DSMSPLUS_RENDER_32BPP
 endif
 
 SRCDIR      = ./source ./source/cpu_cores/$(Z80_CORE) ./source/sound ./source/sound/$(SOUND_ENGINE) ./source/ports/headless
@@ -17,7 +23,7 @@ OBJ_C       = $(notdir $(patsubst %.c, %.o, $(SRC_C)))
 OBJS        = $(OBJ_C)
 
 CFLAGS      = -O2 -g -Wall -Wextra -std=gnu99
-CFLAGS      += -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DNOZIP_SUPPORT -DSMSPLUS_HEADLESS $(PSG_DEFS)
+CFLAGS      += -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DNOZIP_SUPPORT -DSMSPLUS_HEADLESS $(PSG_DEFS) $(RENDER_DEFS)
 CFLAGS      += -Isource -Isource/cpu_cores/$(Z80_CORE) -Isource/ports/headless -Isource/sound -Isource/sound/$(SOUND_ENGINE) -Isource/sound_output
 LDFLAGS     = -lm
 

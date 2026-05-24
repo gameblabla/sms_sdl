@@ -25,8 +25,24 @@
 #ifndef RENDER_H_
 #define RENDER_H_
 
+/*
+ * Native renderer output format.
+ *
+ * Legacy handheld/SDL 1.2 ports normally keep the old RGB565 path.  Modern
+ * frontends can compile with -DSMSPLUS_RENDER_32BPP to render directly to
+ * XRGB8888/ARGB8888-style pixels, avoiding the lossy RGB565 remap and the
+ * extra conversion most 32 bpp GPUs perform internally.
+ */
+#ifdef SMSPLUS_RENDER_32BPP
+#define SMSPLUS_RENDER_DEPTH 32
+#define SMSPLUS_RENDER_BYTES_PER_PIXEL 4
+#define MAKE_PIXEL(r,g,b)   (0xFF000000u | ((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b))
+#else
+#define SMSPLUS_RENDER_DEPTH 16
+#define SMSPLUS_RENDER_BYTES_PER_PIXEL 2
 /* Pack RGB data into a 16-bit RGB 5:6:5 format */
 #define MAKE_PIXEL(r,g,b)   (((r << 8) & 0xF800) | ((g << 3) & 0x07E0) | ((b >> 3) & 0x001F))
+#endif
 
 /* Used for blanking a line in whole or in part */
 #define BACKDROP_COLOR      (0x10 | (vdp.reg[7] & 0x0F))

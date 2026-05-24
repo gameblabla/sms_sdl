@@ -135,6 +135,7 @@ uint8_t *cpu_writemap[64];
 void (*cpu_writemem16)(uint16_t address, uint8_t data);
 void (*cpu_writeport16)(uint16_t port, uint8_t data);
 uint8_t (*cpu_readport16)(uint16_t port);
+extern uint8_t sms_readmem16(uint16_t address);
 
 /* On an NMOS Z80, if LD A,I or LD A,R is interrupted, P/V flag gets reset,
    even if IFF2 was set before this instruction. This issue was fixed on
@@ -146,7 +147,7 @@ uint8_t (*cpu_readport16)(uint16_t port);
  * the elapsed-cycle counter as the nearest equivalent guard. */
 #define Z80_HAS_EXECUTED() (z80_cycle_count != 0 || z80_exec != 0)
 
-#define cpu_readmem16(a) cpu_readmap[(a) >> 10][(a) & 0x03FF]
+#define cpu_readmem16(a) sms_readmem16((uint16_t)(a))
 #define cpu_readop(a) cpu_readmap[(a) >> 10][(a) & 0x03FF]
 #define cpu_readop_arg(a) cpu_readmap[(a) >> 10][(a) & 0x03FF]
 
