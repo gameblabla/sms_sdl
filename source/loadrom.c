@@ -50,6 +50,21 @@ typedef struct
 
 static rominfo_t game_list[] =
 {
+	/* ColecoVision MegaCart titles.  MAME exposes these through the
+	 * colecovision_megacart slot; raw ROM loading has no slot metadata, so
+	 * known dumps are listed explicitly and Coleco >32 KiB power-of-two images
+	 * get a conservative heuristic below. */
+	{0xF3CCACB3, 0, DEVICE_PAD2B, MAPPER_COLECO_MEGACART, DISPLAY_NTSC, TERRITORY_EXPORT, CONSOLE_COLECO, FM_NOT_COMPATIBLE,
+	"PACOL [ColecoVision MegaCart]"},
+	{0xB11A6D23, 0, DEVICE_PAD2B, MAPPER_COLECO_MEGACART, DISPLAY_NTSC, TERRITORY_EXPORT, CONSOLE_COLECO, FM_NOT_COMPATIBLE,
+	"L'Abbaye des Morts [ColecoVision MegaCart]"},
+	{0x53DA40BC, 0, DEVICE_PAD2B, MAPPER_COLECO_MEGACART, DISPLAY_NTSC, TERRITORY_EXPORT, CONSOLE_COLECO, FM_NOT_COMPATIBLE,
+	"Mecha 8 [ColecoVision MegaCart]"},
+	{0xD0F37969, 0, DEVICE_PAD2B, MAPPER_COLECO_MEGACART, DISPLAY_NTSC, TERRITORY_EXPORT, CONSOLE_COLECO, FM_NOT_COMPATIBLE,
+	"Tank Mission [ColecoVision MegaCart]"},
+	{0xA7A8D25E, 0, DEVICE_PAD2B, MAPPER_COLECO_MEGACART, DISPLAY_NTSC, TERRITORY_EXPORT, CONSOLE_COLECO, FM_NOT_COMPATIBLE,
+	"Vanguard [ColecoVision MegaCart]"},
+
 	/* Games requiring CODEMASTER mapper */
 	{0x29822980, 0, DEVICE_PAD2B, MAPPER_CODIES, DISPLAY_PAL, TERRITORY_EXPORT, CONSOLE_SMS2, FM_COMPATIBLE,
 	"Cosmic Spacehead"},
@@ -337,6 +352,20 @@ static int cart_uses_93c46(void)
 	return 0;
 }
 
+static int is_power_of_two_u32(uint32_t v)
+{
+    return v && ((v & (v - 1)) == 0);
+}
+
+static int coleco_megacart_heuristic(void)
+{
+    /* MAME's MegaCart mapper operates in 16 KiB banks and uses a low-bit
+     * mask for bank select, so only power-of-two bank counts are safe to
+     * auto-detect when raw ROMs provide no software-list slot metadata. */
+    return (sms.console == CONSOLE_COLECO) && (cart.size > 0x8000) &&
+           ((cart.size & 0x3FFF) == 0) && is_power_of_two_u32(cart.size >> 14);
+}
+
 void set_config()
 {
 	uint32_t i;
@@ -447,7 +476,8 @@ void set_config()
 		break;
 		case 6:
 			sms.console = CONSOLE_COLECO;
-			cart.mapper = MAPPER_NONE;
+			if (cart.mapper != MAPPER_COLECO_MEGACART)
+				cart.mapper = MAPPER_NONE;
 		break;
 		#ifdef SORDM5_EMU
 		case 7:
@@ -456,6 +486,9 @@ void set_config()
 		break;
 		#endif
 	}
+
+	if (coleco_megacart_heuristic())
+		cart.mapper = MAPPER_COLECO_MEGACART;
   
 	switch(option.country)
 	{

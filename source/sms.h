@@ -49,7 +49,8 @@ enum {
 	MAPPER_KOREA_MSX  = 4,
 	MAPPER_4PAK       = 5,
 	MAPPER_93C46      = 6,
-	MAPPER_WONDERKID  = 7
+	MAPPER_WONDERKID  = 7,
+	MAPPER_COLECO_MEGACART = 8
 };
 
 enum {
@@ -153,6 +154,8 @@ typedef struct
 	uint16_t pages;
 	uint8_t *fcr;
 	uint8_t mapper;
+	uint16_t coleco_megacart_bankcount;
+	uint16_t coleco_megacart_activebank;
 } slot_t;
 
 typedef struct 
@@ -178,5 +181,6 @@ extern void mapper_reset(void);
 extern void mapper_8k_w(uint16_t address, uint8_t data);
 extern void mapper_16k_w(uint16_t address, uint8_t data);
 extern int32_t sms_irq_callback(int32_t param);
+extern uint8_t sms_readop16(uint16_t address);
 
 #endif /* _SMS_H_ */

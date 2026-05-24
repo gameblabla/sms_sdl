@@ -275,6 +275,10 @@ static int bios_init_headless(const cli_options_t *cli)
             return 0;
         }
     }
+    else if (sms.console == CONSOLE_COLECO)
+    {
+        fprintf(stderr, "Warning: no ColecoVision BIOS supplied; cartridge mapper can be inspected, but software will not boot normally. Use --coleco-bios PATH.\n");
+    }
 
     return 1;
 }
@@ -393,8 +397,8 @@ int main(int argc, char **argv)
     if (!cli.quiet)
     {
         fprintf(stdout, "%s %s headless\n", APP_NAME, APP_VERSION);
-        fprintf(stdout, "rom=%s crc=%08X console=%u display=%s frames=%llu\n",
-                cli.rom_path, cart.crc, sms.console,
+        fprintf(stdout, "rom=%s crc=%08X console=%u mapper=%u pages=%u display=%s frames=%llu\n",
+                cli.rom_path, cart.crc, sms.console, cart.mapper, cart.pages,
                 sms.display == DISPLAY_PAL ? "PAL" : "NTSC",
                 (unsigned long long)cli.frames);
     }

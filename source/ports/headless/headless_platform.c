@@ -334,12 +334,14 @@ static int dump_state(const char *prefix)
     FILE *fp = fopen(path, "wb");
     if (!fp) return 0;
     fprintf(fp,
-            "console=%u display=%u territory=%u device0=%u device1=%u lightgun_xy0=%d,%d lightgun_xy1=%d,%d\n"
+            "console=%u display=%u territory=%u mapper=%u pages=%u megacart_bankcount=%u megacart_active=%u device0=%u device1=%u lightgun_xy0=%d,%d lightgun_xy1=%d,%d\n"
             "pc=%04X sp=%04X af=%04X bc=%04X de=%04X hl=%04X ix=%04X iy=%04X wz=%04X\n"
             "i=%02X r=%02X iff1=%u iff2=%u im=%u halt=%u cycles=%d line=%d\n"
             "vdp_mode=%u vdp_height=%u vdp_lpf=%u vdp_status=%02X vdp_addr=%04X vdp_code=%u\n",
-            sms.console, sms.display, sms.territory, sms.device[0], sms.device[1],
-            input.analog[0][0], input.analog[0][1], input.analog[1][0], input.analog[1][1],
+            sms.console, sms.display, sms.territory, cart.mapper, cart.pages,
+            slot.coleco_megacart_bankcount, slot.coleco_megacart_activebank,
+            sms.device[0], sms.device[1], input.analog[0][0], input.analog[0][1],
+            input.analog[1][0], input.analog[1][1],
             Z80.pc.w.l, Z80.sp.w.l, Z80.af.w.l, Z80.bc.w.l, Z80.de.w.l,
             Z80.hl.w.l, Z80.ix.w.l, Z80.iy.w.l, Z80.wz.w.l,
             Z80.i, (uint8_t)((Z80.r & 0x7f) | (Z80.r2 & 0x80)), Z80.iff1, Z80.iff2,

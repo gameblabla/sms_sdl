@@ -170,6 +170,50 @@ static void writemem_mapper_wonderkid(uint16_t offset, uint8_t data)
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
+
+/*
+ * ColecoVision MegaCart mapper.
+ *
+ * This follows MAME's colecovision_megacart_cartridge_device behavior:
+ * $8000-$BFFF reads from the last 16 KiB bank, $C000-$FFFF reads from the
+ * active 16 KiB bank, and any read from the final 64 bytes of the cartridge
+ * address space selects the active bank using the low address bits.  The bank
+ * count is required to be a power of two for the address-mask behavior.
+ */
+static void coleco_megacart_reset(void)
+{
+    uint32_t banks = cart.size >> 14;
+    if (banks < 2) banks = 2;
+    slot.coleco_megacart_bankcount = (uint16_t)banks;
+    slot.coleco_megacart_activebank = 0;
+}
+
+static uint8_t coleco_megacart_read(uint16_t address)
+{
+    uint32_t offset = (uint32_t)(address - 0x8000);
+    uint32_t bankcount = slot.coleco_megacart_bankcount ? slot.coleco_megacart_bankcount : (cart.size >> 14);
+    uint32_t rom_offset;
+
+    if (address < 0x8000)
+        return cpu_readmap[address >> 10][address & 0x03FF];
+
+    if (bankcount <= 2)
+        return cart.rom[offset & (cart.size - 1)];
+
+    if (offset >= 0x7FC0)
+        slot.coleco_megacart_activebank = (uint16_t)(offset & (bankcount - 1));
+
+    if (offset >= 0x4000)
+        rom_offset = ((uint32_t)slot.coleco_megacart_activebank << 14) + (offset - 0x4000);
+    else
+        rom_offset = ((bankcount - 1) << 14) + offset;
+
+    if (rom_offset >= cart.size)
+        rom_offset %= cart.size;
+
+    return cart.rom[rom_offset];
+}
+
 static uint8_t mapper_93c46_read(uint16_t address)
 {
     if ((address & 0xF000) == 0x8000)
@@ -212,6 +256,15 @@ uint8_t sms_readmem16(uint16_t address)
 {
     if (slot.mapper == MAPPER_93C46)
         return mapper_93c46_read(address);
+    if (slot.mapper == MAPPER_COLECO_MEGACART && address >= 0x8000)
+        return coleco_megacart_read(address);
+    return cpu_readmap[address >> 10][address & 0x03FF];
+}
+
+uint8_t sms_readop16(uint16_t address)
+{
+    if (slot.mapper == MAPPER_COLECO_MEGACART && address >= 0x8000)
+        return coleco_megacart_read(address);
     return cpu_readmap[address >> 10][address & 0x03FF];
 }
 
@@ -240,6 +293,9 @@ void mapper_reset(void)
 		break;
 		case MAPPER_WONDERKID:
 			cpu_writemem16 = writemem_mapper_wonderkid;
+		break;
+		case MAPPER_COLECO_MEGACART:
+			cpu_writemem16 = writemem_mapper_none;
 		break;
 		default:
 			cpu_writemem16 = writemem_mapper_sega;
@@ -391,11 +447,36 @@ void sms_reset(void)
         cpu_writemap[i] = &sms.wram[0];
       }
 
-      /* $8000-$FFFF mapped to Cartridge ROM (max. 32K) */
-      for(i = 0x20; i < 0x40; i++)
+      if (cart.mapper == MAPPER_COLECO_MEGACART)
       {
-        cpu_readmap[i]  = &cart.rom[(i&0x1F) << 10];
-        cpu_writemap[i] = dummy_write;
+        coleco_megacart_reset();
+
+        /*
+         * Install conservative direct pages for opcode prefetch.  Data reads
+         * and opcode fetches in the cart window are still routed through
+         * sms_readmem16()/sms_readop16() so reads from $FFC0-$FFFF can perform
+         * the MegaCart bank-select side effect.
+         */
+        for(i = 0x20; i < 0x30; i++)
+        {
+          uint32_t bank = (slot.coleco_megacart_bankcount - 1) << 14;
+          cpu_readmap[i]  = &cart.rom[bank + ((i & 0x0F) << 10)];
+          cpu_writemap[i] = dummy_write;
+        }
+        for(i = 0x30; i < 0x40; i++)
+        {
+          cpu_readmap[i]  = &cart.rom[((i & 0x0F) << 10)];
+          cpu_writemap[i] = dummy_write;
+        }
+      }
+      else
+      {
+        /* $8000-$FFFF mapped to Cartridge ROM (max. 32K) */
+        for(i = 0x20; i < 0x40; i++)
+        {
+          cpu_readmap[i]  = &cart.rom[(i&0x1F) << 10];
+          cpu_writemap[i] = dummy_write;
+        }
       }
 
       /* reset I/O */
