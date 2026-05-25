@@ -17,14 +17,14 @@ RENDER_DEFS += -DSMSPLUS_RENDER_32BPP
 endif
 
 SRCDIR      = ./source ./source/cpu_cores/$(Z80_CORE) ./source/sound ./source/sound/$(SOUND_ENGINE) ./source/ports/headless
-VPATH       = $(SRCDIR)
-SRC_C       = $(foreach dir, $(SRCDIR), $(wildcard $(dir)/*.c))
+VPATH       = $(SRCDIR) ./source/unzip
+SRC_C       = $(foreach dir, $(SRCDIR), $(wildcard $(dir)/*.c)) ./source/unzip/miniz.c
 OBJ_C       = $(notdir $(patsubst %.c, %.o, $(SRC_C)))
 OBJS        = $(OBJ_C)
 
 CFLAGS      = -O2 -g -Wall -Wextra -std=gnu99
 CFLAGS      += -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DNOZIP_SUPPORT -DSMSPLUS_HEADLESS $(PSG_DEFS) $(RENDER_DEFS)
-CFLAGS      += -Isource -Isource/cpu_cores/$(Z80_CORE) -Isource/ports/headless -Isource/sound -Isource/sound/$(SOUND_ENGINE) -Isource/sound_output
+CFLAGS      += -Isource -Isource/cpu_cores/$(Z80_CORE) -Isource/ports/headless -Isource/sound -Isource/sound/$(SOUND_ENGINE) -Isource/sound_output -Isource/unzip
 LDFLAGS     = -lm
 
 $(PRGNAME): $(OBJS)

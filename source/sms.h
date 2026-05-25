@@ -178,6 +178,7 @@ extern void sms_init(void);
 extern void sms_reset(void);
 extern void sms_shutdown(void);
 extern void mapper_reset(void);
+extern void mapper_restore_state(void);
 extern void mapper_8k_w(uint16_t address, uint8_t data);
 extern void mapper_16k_w(uint16_t address, uint8_t data);
 extern int32_t sms_irq_callback(int32_t param);

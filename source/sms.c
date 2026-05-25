@@ -323,6 +323,102 @@ void mapper_reset(void)
 	}
 }
 
+void mapper_restore_state(void)
+{
+    uint_fast8_t i;
+
+    slot.rom = cart.rom;
+    slot.pages = cart.pages;
+    slot.mapper = cart.mapper;
+    slot.fcr = &cart.fcr[0];
+
+    mapper_reset();
+
+    if (sms.console == CONSOLE_COLECO)
+    {
+        /* Restore the fixed ColecoVision address map, then re-apply the
+         * active MegaCart bank saved in the v2 state extension. */
+        for (i = 0x00; i < 0x08; i++)
+        {
+            cpu_readmap[i]  = &coleco.rom[i << 10];
+            cpu_writemap[i] = dummy_write;
+        }
+        for (i = 0x08; i < 0x18; i++)
+        {
+            cpu_readmap[i]  = dummy_read;
+            cpu_writemap[i] = dummy_write;
+        }
+        for (i = 0x18; i < 0x20; i++)
+        {
+            cpu_readmap[i]  = &sms.wram[0];
+            cpu_writemap[i] = &sms.wram[0];
+        }
+
+        if (slot.mapper == MAPPER_COLECO_MEGACART)
+        {
+            uint16_t saved_bank = slot.coleco_megacart_activebank;
+            coleco_megacart_reset();
+            coleco_megacart_map_active_bank(saved_bank);
+        }
+        else
+        {
+            for (i = 0x20; i < 0x40; i++)
+            {
+                cpu_readmap[i]  = &cart.rom[(i & 0x1F) << 10];
+                cpu_writemap[i] = dummy_write;
+            }
+        }
+        return;
+    }
+
+#ifdef SORDM5_EMU
+    if (sms.console == CONSOLE_SORDM5)
+    {
+        for (i = 0x00; i < 0x40; i++)
+        {
+            cpu_readmap[i]  = dummy_read;
+            cpu_writemap[i] = dummy_write;
+        }
+        for (i = 0x00; i < 0x08; i++)
+        {
+            cpu_readmap[i]  = &coleco.rom[i << 10];
+            cpu_writemap[i] = dummy_write;
+        }
+        for (i = 0x08; i < 0x1C; i++)
+        {
+            uint32_t cart_offset = (uint32_t)(i - 0x08) << 10;
+            cpu_readmap[i]  = (cart.loaded && (cart_offset < cart.size)) ? &cart.rom[cart_offset] : dummy_read;
+            cpu_writemap[i] = dummy_write;
+        }
+        for (i = 0x1C; i < 0x20; i++)
+        {
+            cpu_readmap[i]  = &sms.wram[(i - 0x1C) << 10];
+            cpu_writemap[i] = &sms.wram[(i - 0x1C) << 10];
+        }
+        return;
+    }
+#endif
+
+    if ((sms.console != CONSOLE_SG1000) && (sms.console != CONSOLE_SF7000) && (sms.console != CONSOLE_SC3000))
+    {
+        cpu_readmap[0] = &slot.rom[0];
+        if (slot.mapper != MAPPER_KOREA_MSX)
+        {
+            mapper_16k_w(0, slot.fcr[0]);
+            mapper_16k_w(1, slot.fcr[1]);
+            mapper_16k_w(2, slot.fcr[2]);
+            mapper_16k_w(3, slot.fcr[3]);
+        }
+        else
+        {
+            mapper_8k_w(0, slot.fcr[0]);
+            mapper_8k_w(1, slot.fcr[1]);
+            mapper_8k_w(2, slot.fcr[2]);
+            mapper_8k_w(3, slot.fcr[3]);
+        }
+    }
+}
+
 void sms_init(void)
 {
 	CPUZ80_Init();

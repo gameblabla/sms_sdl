@@ -16,6 +16,7 @@ extern "C" {
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -23,9 +24,68 @@ extern "C" {
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #ifndef SDL_BUTTON_LMASK
 #define SDL_BUTTON_LMASK 0x01u
+#endif
+#ifndef SDL_SCANCODE_F5
+#define SDL_SCANCODE_F5 ((SDL_Scancode)62)
+#endif
+#ifndef SDL_SCANCODE_F6
+#define SDL_SCANCODE_F6 ((SDL_Scancode)63)
+#endif
+#ifndef SDL_SCANCODE_F8
+#define SDL_SCANCODE_F8 ((SDL_Scancode)65)
+#endif
+#ifndef SDL_GAMEPAD_BUTTON_INVALID
+#define SDL_GAMEPAD_BUTTON_INVALID ((SDL_GamepadButton)-1)
+#endif
+
+#ifndef SDL_TEXTUREACCESS_STREAMING
+#define SDL_TEXTUREACCESS_STREAMING SDL_TEXTUREACCESS_STREAMING
+#endif
+#ifndef SDL_SCANCODE_KP_0
+#define SDL_SCANCODE_KP_0 SDL_SCANCODE_0
+#endif
+#ifndef SDL_SCANCODE_KP_1
+#define SDL_SCANCODE_KP_1 SDL_SCANCODE_1
+#endif
+#ifndef SDL_SCANCODE_KP_2
+#define SDL_SCANCODE_KP_2 SDL_SCANCODE_2
+#endif
+#ifndef SDL_SCANCODE_KP_3
+#define SDL_SCANCODE_KP_3 SDL_SCANCODE_3
+#endif
+#ifndef SDL_SCANCODE_KP_4
+#define SDL_SCANCODE_KP_4 SDL_SCANCODE_4
+#endif
+#ifndef SDL_SCANCODE_KP_5
+#define SDL_SCANCODE_KP_5 SDL_SCANCODE_5
+#endif
+#ifndef SDL_SCANCODE_KP_6
+#define SDL_SCANCODE_KP_6 SDL_SCANCODE_6
+#endif
+#ifndef SDL_SCANCODE_KP_7
+#define SDL_SCANCODE_KP_7 SDL_SCANCODE_7
+#endif
+#ifndef SDL_SCANCODE_KP_8
+#define SDL_SCANCODE_KP_8 SDL_SCANCODE_8
+#endif
+#ifndef SDL_SCANCODE_KP_9
+#define SDL_SCANCODE_KP_9 SDL_SCANCODE_9
+#endif
+#ifndef SDL_SCANCODE_KP_MULTIPLY
+#define SDL_SCANCODE_KP_MULTIPLY SDL_SCANCODE_UNKNOWN
+#endif
+#ifndef SDL_SCANCODE_KP_HASH
+#define SDL_SCANCODE_KP_HASH SDL_SCANCODE_UNKNOWN
+#endif
+#ifndef SDL_SCANCODE_APOSTROPHE
+#define SDL_SCANCODE_APOSTROPHE SDL_SCANCODE_UNKNOWN
+#endif
+#ifndef SDL_SCANCODE_BACKSLASH
+#define SDL_SCANCODE_BACKSLASH SDL_SCANCODE_UNKNOWN
 #endif
 
 extern "C" { t_config option; }
@@ -75,6 +135,9 @@ enum Action
     ACT_PAUSE,
     ACT_MENU,
     ACT_VKBD,
+    ACT_SAVE_STATE,
+    ACT_LOAD_STATE,
+    ACT_REWIND,
     ACT_COUNT
 };
 
@@ -90,6 +153,9 @@ static std::array<Binding, ACT_COUNT> g_bindings = {{
     {"Pause", SDL_SCANCODE_RETURN, SDL_GAMEPAD_BUTTON_START},
     {"Menu", SDL_SCANCODE_ESCAPE, SDL_GAMEPAD_BUTTON_BACK},
     {"Virtual Keyboard", SDL_SCANCODE_TAB, SDL_GAMEPAD_BUTTON_NORTH},
+    {"Save State", SDL_SCANCODE_F5, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Load State", SDL_SCANCODE_F8, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Rewind", SDL_SCANCODE_F6, SDL_GAMEPAD_BUTTON_INVALID},
 }};
 
 struct M5Key
@@ -142,6 +208,12 @@ static constexpr M5Key kM5Keys[] = {
     {"Right", 6, 0x40, SDLK_RIGHT, SDL_SCANCODE_RIGHT}, {"]", 6, 0x80, SDLK_RIGHTBRACKET, SDL_SCANCODE_RIGHTBRACKET},
 };
 
+struct RewindSnapshot
+{
+    uint64_t frame = 0;
+    std::vector<uint8_t> data;
+};
+
 struct AppState
 {
     SDL_Window *window = nullptr;
@@ -160,7 +232,26 @@ struct AppState
     bool rom_loaded = false;
     bool paused = false;
     int capture_binding = -1;
+    int capture_gamepad_binding = -1;
     int vk_index = 0;
+    int save_slot = 0;
+    uint64_t frame_counter = 0;
+    uint64_t last_autosave_frame = 0;
+    uint64_t last_rewind_capture_frame = 0;
+    bool autosave_enabled = true;
+    bool rewind_enabled = true;
+    bool rewind_hold = false;
+    int autosave_interval_frames = 600;
+    int rewind_interval_frames = 10;
+    size_t rewind_max_snapshots = 360;
+    std::vector<RewindSnapshot> rewind_snapshots;
+    std::filesystem::path state_dir;
+    std::filesystem::path save_dir;
+    std::filesystem::path config_dir;
+    SDL_Texture *state_thumb_texture = nullptr;
+    std::filesystem::path state_thumb_path;
+    int state_thumb_w = 0;
+    int state_thumb_h = 0;
 };
 
 static void set_defaults()
@@ -184,6 +275,26 @@ static const char *ext_of(const std::string &path)
     const char *dot = std::strrchr(path.c_str(), '.');
     return dot ? dot : "";
 }
+
+static std::filesystem::path user_smsplus_dir()
+{
+#ifdef SMSPLUS_PORTABLE
+    return std::filesystem::current_path();
+#else
+    const char *home = std::getenv("HOME");
+    if (home && home[0]) return std::filesystem::path(home) / ".smsplus";
+    return std::filesystem::current_path() / ".smsplus";
+#endif
+}
+
+static void init_user_paths(AppState &app)
+{
+    std::filesystem::path root = user_smsplus_dir();
+    app.config_dir = root;
+    app.state_dir = root / "states";
+    app.save_dir = root / "saves";
+}
+
 
 static void set_console_from_path(const std::string &path)
 {
@@ -337,10 +448,228 @@ static bool init_bitmap()
     return true;
 }
 
+static std::string sanitize_component(std::string s)
+{
+    if (s.empty()) s = "cart";
+    for (char &c : s)
+    {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (!std::isalnum(uc) && c != '-' && c != '_' && c != '.') c = '_';
+    }
+    return s;
+}
+
+static bool ensure_state_dir(const std::filesystem::path &dir)
+{
+    std::error_code ec;
+    if (std::filesystem::is_directory(dir, ec)) return true;
+    return std::filesystem::create_directories(dir, ec) || std::filesystem::is_directory(dir, ec);
+}
+
+static std::filesystem::path state_path_for_slot(const std::string &rom_path, const std::filesystem::path &dir, int slot)
+{
+    std::filesystem::path rp(rom_path.empty() ? "cart" : rom_path);
+    char suffix[64];
+    std::snprintf(suffix, sizeof(suffix), "_%08X.slot%d.png", cart.crc, slot);
+    return dir / (sanitize_component(rp.stem().string()) + suffix);
+}
+
+static std::filesystem::path autosave_path(const AppState &app)
+{
+    std::filesystem::path rp(app.rom_path.empty() ? "cart" : app.rom_path);
+    char suffix[64];
+    std::snprintf(suffix, sizeof(suffix), "_%08X.auto.png", cart.crc);
+    return app.state_dir / (sanitize_component(rp.stem().string()) + suffix);
+}
+
+#ifndef SMSPLUS_RENDER_32BPP
+static uint32_t rgb565_to_xrgb8888(uint16_t p)
+{
+    uint32_t r = (p >> 11) & 0x1F;
+    uint32_t g = (p >> 5) & 0x3F;
+    uint32_t b = p & 0x1F;
+    r = (r << 3) | (r >> 2);
+    g = (g << 2) | (g >> 4);
+    b = (b << 3) | (b >> 2);
+    return 0xFF000000u | (r << 16) | (g << 8) | b;
+}
+#endif
+
+static std::vector<uint32_t> capture_thumbnail(uint32_t &tw, uint32_t &th)
+{
+    int active_w = bitmap.viewport.w > 0 ? bitmap.viewport.w : 256;
+    int active_h = bitmap.viewport.h > 0 ? bitmap.viewport.h : vdp.height;
+    int src_x0 = std::max(0, bitmap.viewport.x);
+    if (active_w <= 0) active_w = 256;
+    if (active_h <= 0) active_h = 192;
+
+    tw = static_cast<uint32_t>(std::min(active_w, 160));
+    th = static_cast<uint32_t>(std::max(1, (active_h * static_cast<int>(tw) + active_w / 2) / active_w));
+    std::vector<uint32_t> thumb(static_cast<size_t>(tw) * th, 0xFF000000u);
+
+    for (uint32_t y = 0; y < th; y++)
+    {
+        int sy = static_cast<int>((static_cast<uint64_t>(y) * active_h) / th);
+        const uint8_t *src_line = bitmap.data + sy * bitmap.pitch;
+        for (uint32_t x = 0; x < tw; x++)
+        {
+            int sx = src_x0 + static_cast<int>((static_cast<uint64_t>(x) * active_w) / tw);
+#ifdef SMSPLUS_RENDER_32BPP
+            uint32_t p = *reinterpret_cast<const uint32_t *>(src_line + sx * 4);
+            thumb[static_cast<size_t>(y) * tw + x] = 0xFF000000u | (p & 0x00FFFFFFu);
+#else
+            uint16_t p = *reinterpret_cast<const uint16_t *>(src_line + sx * 2);
+            thumb[static_cast<size_t>(y) * tw + x] = rgb565_to_xrgb8888(p);
+#endif
+        }
+    }
+    return thumb;
+}
+
+static bool save_state_file(AppState &app, const std::filesystem::path &path)
+{
+    if (!app.rom_loaded)
+    {
+        app.status = "No game loaded.";
+        return false;
+    }
+    if (!ensure_state_dir(path.parent_path()))
+    {
+        app.status = "Could not create state directory: " + path.parent_path().string();
+        return false;
+    }
+    uint32_t tw = 0, th = 0;
+    std::vector<uint32_t> thumb = capture_thumbnail(tw, th);
+    if (!system_save_state_file_ex(path.string().c_str(), thumb.data(), tw, th, tw * sizeof(uint32_t)))
+    {
+        app.status = "Save state failed: " + path.string();
+        return false;
+    }
+    app.status = "Saved state: " + path.string();
+    return true;
+}
+
+static bool load_state_file(AppState &app, const std::filesystem::path &path)
+{
+    if (!app.rom_loaded)
+    {
+        app.status = "Load a game before loading a state.";
+        return false;
+    }
+    if (!file_readable(path))
+    {
+        app.status = "State not found: " + path.string();
+        return false;
+    }
+    if (!system_load_state_file(path.string().c_str()))
+    {
+        app.status = "Load state failed: " + path.string();
+        return false;
+    }
+    app.status = "Loaded state: " + path.string();
+    return true;
+}
+
+static void invalidate_state_thumbnail(AppState &app)
+{
+    if (app.state_thumb_texture)
+    {
+        SDL_DestroyTexture(app.state_thumb_texture);
+        app.state_thumb_texture = nullptr;
+    }
+    app.state_thumb_path.clear();
+    app.state_thumb_w = app.state_thumb_h = 0;
+}
+
+static void load_state_thumbnail(AppState &app, const std::filesystem::path &path)
+{
+    if (app.state_thumb_texture && app.state_thumb_path == path) return;
+    invalidate_state_thumbnail(app);
+    uint32_t *pixels = nullptr;
+    uint32_t w = 0, h = 0;
+    if (!system_state_png_read_thumbnail(path.string().c_str(), &pixels, &w, &h)) return;
+    SDL_Texture *tex = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, (int)w, (int)h);
+    if (tex)
+    {
+        SDL_UpdateTexture(tex, nullptr, pixels, (int)w * 4);
+        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+        app.state_thumb_texture = tex;
+        app.state_thumb_path = path;
+        app.state_thumb_w = (int)w;
+        app.state_thumb_h = (int)h;
+    }
+    system_free_state_buffer(pixels);
+}
+
+
+static bool save_slot(AppState &app, int slot)
+{
+    return save_state_file(app, state_path_for_slot(app.rom_path, app.state_dir, slot));
+}
+
+static bool load_slot(AppState &app, int slot)
+{
+    return load_state_file(app, state_path_for_slot(app.rom_path, app.state_dir, slot));
+}
+
+static void capture_rewind_snapshot(AppState &app)
+{
+    if (!app.rom_loaded || !app.rewind_enabled) return;
+    uint8_t *data = nullptr;
+    uint32_t size = 0;
+    if (!system_save_state_buffer(&data, &size)) return;
+    RewindSnapshot snap;
+    snap.frame = app.frame_counter;
+    snap.data.assign(data, data + size);
+    system_free_state_buffer(data);
+    app.rewind_snapshots.push_back(std::move(snap));
+    if (app.rewind_snapshots.size() > app.rewind_max_snapshots)
+        app.rewind_snapshots.erase(app.rewind_snapshots.begin());
+    app.last_rewind_capture_frame = app.frame_counter;
+}
+
+static bool rewind_one_snapshot(AppState &app)
+{
+    if (!app.rom_loaded || app.rewind_snapshots.empty()) return false;
+    RewindSnapshot snap = std::move(app.rewind_snapshots.back());
+    app.rewind_snapshots.pop_back();
+    if (!snap.data.empty())
+    {
+        if (system_load_state_buffer(snap.data.data(), static_cast<uint32_t>(snap.data.size())))
+        {
+            app.frame_counter = snap.frame;
+            app.status = "Rewound to frame " + std::to_string(static_cast<unsigned long long>(snap.frame));
+            return true;
+        }
+    }
+    return false;
+}
+
+static void maybe_autosave(AppState &app)
+{
+    if (!app.autosave_enabled || !app.rom_loaded) return;
+    if (app.frame_counter - app.last_autosave_frame < static_cast<uint64_t>(app.autosave_interval_frames)) return;
+    save_state_file(app, autosave_path(app));
+    app.last_autosave_frame = app.frame_counter;
+}
+
+static void maybe_capture_rewind(AppState &app)
+{
+    if (!app.rewind_enabled || !app.rom_loaded) return;
+    if (app.frame_counter - app.last_rewind_capture_frame >= static_cast<uint64_t>(app.rewind_interval_frames))
+        capture_rewind_snapshot(app);
+}
+
+
 extern "C" void smsp_state(uint8_t slot_number, uint8_t mode)
 {
-    (void)slot_number;
-    (void)mode;
+    std::filesystem::path dir = user_smsplus_dir() / "states";
+    std::filesystem::path path = state_path_for_slot(option.game_name, dir, slot_number);
+    ensure_state_dir(dir);
+    if (mode == 0)
+        system_save_state_file_ex(path.string().c_str(), nullptr, 0, 0, 0);
+    else if (mode == 1)
+        system_load_state_file(path.string().c_str());
 }
 
 extern "C" void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
@@ -405,8 +734,23 @@ static bool load_game(AppState &app, const std::string &path)
     app.ui.db_lightgun = (sms.device[0] == DEVICE_LIGHTGUN);
     if (app.ui.force_lightgun) sms.device[0] = DEVICE_LIGHTGUN;
     app.rom_path = path;
+    if (g_sram_path.empty())
+    {
+        ensure_state_dir(app.save_dir);
+        std::filesystem::path rp(app.rom_path.empty() ? "cart" : app.rom_path);
+        char suffix[64];
+        std::snprintf(suffix, sizeof(suffix), "_%08X.sav", cart.crc);
+        g_sram_path = (app.save_dir / (sanitize_component(rp.stem().string()) + suffix)).string();
+    }
     app.rom_loaded = true;
     app.paused = false;
+    app.frame_counter = 0;
+    app.last_autosave_frame = 0;
+    app.last_rewind_capture_frame = 0;
+    app.rewind_hold = false;
+    app.rewind_snapshots.clear();
+    ensure_state_dir(app.state_dir);
+    invalidate_state_thumbnail(app);
     app.status = "Loaded " + path;
     return true;
 }
@@ -514,6 +858,29 @@ static void update_keyboard_state_from_bindings()
     }
 }
 
+static void update_coleco_keypad_from_keyboard()
+{
+    if (sms.console != CONSOLE_COLECO) return;
+    int nkeys = 0;
+    const bool *state = SDL_GetKeyboardState(&nkeys);
+    coleco.keypad[0] = 0xff;
+    coleco.keypad[1] = 0xff;
+    if (!state) return;
+    auto down = [&](SDL_Scancode sc) { return sc > SDL_SCANCODE_UNKNOWN && sc < nkeys && state[sc]; };
+    if (down(SDL_SCANCODE_0) || down(SDL_SCANCODE_KP_0)) coleco.keypad[0] = 0;
+    else if (down(SDL_SCANCODE_1) || down(SDL_SCANCODE_KP_1)) coleco.keypad[0] = 1;
+    else if (down(SDL_SCANCODE_2) || down(SDL_SCANCODE_KP_2)) coleco.keypad[0] = 2;
+    else if (down(SDL_SCANCODE_3) || down(SDL_SCANCODE_KP_3)) coleco.keypad[0] = 3;
+    else if (down(SDL_SCANCODE_4) || down(SDL_SCANCODE_KP_4)) coleco.keypad[0] = 4;
+    else if (down(SDL_SCANCODE_5) || down(SDL_SCANCODE_KP_5)) coleco.keypad[0] = 5;
+    else if (down(SDL_SCANCODE_6) || down(SDL_SCANCODE_KP_6)) coleco.keypad[0] = 6;
+    else if (down(SDL_SCANCODE_7) || down(SDL_SCANCODE_KP_7)) coleco.keypad[0] = 7;
+    else if (down(SDL_SCANCODE_8) || down(SDL_SCANCODE_KP_8)) coleco.keypad[0] = 8;
+    else if (down(SDL_SCANCODE_9) || down(SDL_SCANCODE_KP_9)) coleco.keypad[0] = 9;
+    else if (down(SDL_SCANCODE_KP_MULTIPLY) || down(SDL_SCANCODE_APOSTROPHE)) coleco.keypad[0] = 10;
+    else if (down(SDL_SCANCODE_KP_HASH) || down(SDL_SCANCODE_BACKSLASH)) coleco.keypad[0] = 11;
+}
+
 static SDL_FRect compute_dest_rect(const UiSettings &ui, int active_w, int active_h, int win_w, int win_h);
 
 static bool lightgun_active()
@@ -581,15 +948,65 @@ static void open_first_gamepad(AppState &app)
     SDL_free(ids);
 }
 
+static bool handle_action_command(AppState &app, Action action, bool down)
+{
+    if (action == ACT_SAVE_STATE)
+    {
+        if (down) save_slot(app, app.save_slot);
+        return true;
+    }
+    if (action == ACT_LOAD_STATE)
+    {
+        if (down) load_slot(app, app.save_slot);
+        return true;
+    }
+    if (action == ACT_REWIND)
+    {
+        app.rewind_hold = down;
+        if (down && !app.rewind_enabled)
+            app.status = "Rewind is disabled.";
+        return true;
+    }
+    return false;
+}
+
+static const char *gamepad_button_name(SDL_GamepadButton button)
+{
+    switch (button)
+    {
+        case SDL_GAMEPAD_BUTTON_DPAD_UP: return "D-pad Up";
+        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return "D-pad Down";
+        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "D-pad Left";
+        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "D-pad Right";
+        case SDL_GAMEPAD_BUTTON_SOUTH: return "South";
+        case SDL_GAMEPAD_BUTTON_EAST: return "East";
+        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return "L Shoulder";
+        case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return "R Shoulder";
+        case SDL_GAMEPAD_BUTTON_START: return "Start";
+        case SDL_GAMEPAD_BUTTON_BACK: return "Back";
+        case SDL_GAMEPAD_BUTTON_NORTH: return "North";
+        default: return "Unbound";
+    }
+}
+
 static void handle_gamepad_button(AppState &app, SDL_GamepadButton button, bool down)
 {
+    if (app.capture_gamepad_binding >= 0 && down)
+    {
+        g_bindings[app.capture_gamepad_binding].button = button;
+        app.capture_gamepad_binding = -1;
+        return;
+    }
+
     for (int i = 0; i < ACT_COUNT; i++)
     {
         if (g_bindings[i].button == button)
         {
+            Action action = static_cast<Action>(i);
+            if (handle_action_command(app, action, down)) continue;
             if (i == ACT_MENU && down) app.ui.show_menu = !app.ui.show_menu;
             else if (i == ACT_VKBD && down) app.ui.show_keyboard = !app.ui.show_keyboard;
-            else apply_action(static_cast<Action>(i), down);
+            else apply_action(action, down);
         }
     }
 }
@@ -607,6 +1024,7 @@ static void parse_args(AppState &app, int argc, char **argv)
         else if (!std::strcmp(a, "--bios")) { if (const char *v = need(a)) app.bios_path = v; }
         else if (!std::strcmp(a, "--coleco-bios")) { if (const char *v = need(a)) app.coleco_bios_path = v; }
         else if (!std::strcmp(a, "--sram")) { if (const char *v = need(a)) g_sram_path = v; }
+        else if (!std::strcmp(a, "--state-dir")) { if (const char *v = need(a)) app.state_dir = v; }
         else if (!std::strcmp(a, "--console"))
         {
             if (const char *v = need(a))
@@ -625,6 +1043,8 @@ static void parse_args(AppState &app, int argc, char **argv)
         else if (!std::strcmp(a, "--lcd-persistence")) option.lcd_persistence = 1;
         else if (!std::strcmp(a, "--no-lcd-persistence")) option.lcd_persistence = 0;
         else if (!std::strcmp(a, "--no-audio")) app.ui.audio = false;
+        else if (!std::strcmp(a, "--no-autosave")) app.autosave_enabled = false;
+        else if (!std::strcmp(a, "--no-rewind")) app.rewind_enabled = false;
         else if (!std::strcmp(a, "--lightgun")) app.ui.force_lightgun = true;
         else if (!std::strcmp(a, "--no-mouse-lightgun")) app.ui.mouse_lightgun = false;
         else if (!std::strcmp(a, "--lightgun-cursor")) { app.ui.show_lightgun_cursor = true; option.lightgun_cursor = 1; }
@@ -723,9 +1143,9 @@ static void draw_browser(AppState &app)
     ImGui::EndChild();
 }
 
-static void draw_controls(AppState &app)
+static void draw_keyboard_controls(AppState &app)
 {
-    ImGui::TextUnformatted("Controls");
+    ImGui::TextUnformatted("Keyboard remapping");
     for (int i = 0; i < ACT_COUNT; i++)
     {
         ImGui::PushID(i);
@@ -737,6 +1157,22 @@ static void draw_controls(AppState &app)
         ImGui::PopID();
     }
     ImGui::TextWrapped("M5 keyboard is direct: PC number keys 1/2 drive the M5 rows used by Pooyan. Text events are also accepted so non-QWERTY layouts can enter logical characters.");
+}
+
+static void draw_controller_controls(AppState &app)
+{
+    ImGui::TextUnformatted("Game controller remapping");
+    ImGui::Text("Gamepad: %s", app.gamepad ? "connected" : "not connected");
+    for (int i = 0; i < ACT_COUNT; i++)
+    {
+        ImGui::PushID(1000 + i);
+        ImGui::Text("%-20s", g_bindings[i].name);
+        ImGui::SameLine(220);
+        if (ImGui::Button(app.capture_gamepad_binding == i ? "press a button..." : gamepad_button_name(g_bindings[i].button), ImVec2(160, 0)))
+            app.capture_gamepad_binding = i;
+        ImGui::PopID();
+    }
+
     ImGui::Separator();
     ImGui::TextUnformatted("Light Phaser");
     bool force = app.ui.force_lightgun;
@@ -756,6 +1192,49 @@ static void draw_controls(AppState &app)
     ImGui::Text("Detected: %s  X:%d Y:%d Trigger:%s", lightgun_active() ? "yes" : "no",
                 input.analog[lightgun_port()][0], input.analog[lightgun_port()][1],
                 (input.pad[lightgun_port()] & INPUT_BUTTON1) ? "down" : "up");
+}
+
+static void draw_states(AppState &app)
+{
+    ImGui::TextUnformatted("Save states");
+    ImGui::Text("Directory: %s", app.state_dir.string().c_str());
+    if (ImGui::Button("Slot -")) app.save_slot = std::max(0, app.save_slot - 1);
+    ImGui::SameLine();
+    ImGui::Text("Slot %d", app.save_slot);
+    ImGui::SameLine();
+    if (ImGui::Button("Slot +")) app.save_slot = std::min(9, app.save_slot + 1);
+
+    std::filesystem::path slot_path = state_path_for_slot(app.rom_path, app.state_dir, app.save_slot);
+    load_state_thumbnail(app, slot_path);
+    if (app.state_thumb_texture)
+    {
+        ImGui::Image((ImTextureID)app.state_thumb_texture, ImVec2((float)app.state_thumb_w, (float)app.state_thumb_h));
+        ImGui::Text("%s", slot_path.filename().string().c_str());
+    }
+    else
+    {
+        ImGui::TextUnformatted("No thumbnail for this slot yet.");
+    }
+
+    if (ImGui::Button("Save state")) { save_slot(app, app.save_slot); invalidate_state_thumbnail(app); }
+    ImGui::SameLine();
+    if (ImGui::Button("Load state")) load_slot(app, app.save_slot);
+    ImGui::SameLine();
+    if (ImGui::Button("Load autosave")) load_state_file(app, autosave_path(app));
+
+    ImGui::Separator();
+    ImGui::Checkbox("Auto-save", &app.autosave_enabled);
+    ImGui::SameLine();
+    ImGui::Text("every %d frames", app.autosave_interval_frames);
+    if (ImGui::Button("Autosave -")) app.autosave_interval_frames = std::max(60, app.autosave_interval_frames - 60);
+    ImGui::SameLine();
+    if (ImGui::Button("Autosave +")) app.autosave_interval_frames = std::min(3600, app.autosave_interval_frames + 60);
+
+    ImGui::Checkbox("Rewind", &app.rewind_enabled);
+    ImGui::SameLine();
+    ImGui::Text("snapshots: %d", static_cast<int>(app.rewind_snapshots.size()));
+    if (ImGui::Button("Rewind one step")) rewind_one_snapshot(app);
+    ImGui::TextWrapped("Hotkeys: F5 saves, F8 loads, hold F6 to rewind. State files are PNG images with an embedded compressed save-state chunk, so the thumbnail is visible outside the emulator too.");
 }
 
 static void draw_virtual_keyboard(AppState &app)
@@ -791,6 +1270,7 @@ static void draw_menu(AppState &app)
     if (ImGui::BeginTabBar("tabs"))
     {
         if (ImGui::BeginTabItem("Games")) { draw_browser(app); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("States")) { draw_states(app); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Video"))
         {
             ImGui::Checkbox("Keep aspect ratio", &app.ui.keep_aspect);
@@ -804,7 +1284,8 @@ static void draw_menu(AppState &app)
             ImGui::Text("Active viewport: %d x %d", bitmap.viewport.w, bitmap.viewport.h);
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Input")) { draw_controls(app); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Keyboard")) { draw_keyboard_controls(app); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Controllers")) { draw_controller_controls(app); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Machine"))
         {
             ImGui::Text("ROM: %s", app.rom_path.empty() ? "<none>" : app.rom_path.c_str());
@@ -860,6 +1341,11 @@ static void handle_event(AppState &app, const SDL_Event &e)
                 g_bindings[app.capture_binding].scan = e.key.scancode;
                 app.capture_binding = -1;
                 break;
+            }
+            for (int i = 0; i < ACT_COUNT; i++)
+            {
+                if (g_bindings[i].scan == e.key.scancode)
+                    handle_action_command(app, static_cast<Action>(i), down);
             }
             if (e.key.key == SDLK_ESCAPE && down) app.ui.show_menu = !app.ui.show_menu;
             if (e.key.key == SDLK_TAB && down) app.ui.show_keyboard = !app.ui.show_keyboard;
@@ -975,6 +1461,7 @@ static void shutdown_app(AppState &app)
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
+    if (app.state_thumb_texture) SDL_DestroyTexture(app.state_thumb_texture);
     if (app.texture) SDL_DestroyTexture(app.texture);
     if (app.renderer) SDL_DestroyRenderer(app.renderer);
     if (app.window) SDL_DestroyWindow(app.window);
@@ -987,7 +1474,10 @@ int main(int argc, char **argv)
 {
     AppState app;
     set_defaults();
+    init_user_paths(app);
     parse_args(app, argc, argv);
+    ensure_state_dir(app.state_dir);
+    ensure_state_dir(app.save_dir);
     if (!init_bitmap()) return 1;
     if (!init_sdl(app))
     {
@@ -1005,19 +1495,30 @@ int main(int argc, char **argv)
         SDL_Event e;
         while (SDL_PollEvent(&e)) handle_event(app, e);
         update_keyboard_state_from_bindings();
+        update_coleco_keypad_from_keyboard();
         update_virtual_keyboard_gamepad(app);
         update_lightgun_mouse(app);
 
         if (app.rom_loaded && !app.paused)
         {
-            system_frame(0);
-            for (size_t i = 0; i < SORDM5_KEY_ROWS; i++)
+            if (app.rewind_hold && app.rewind_enabled)
             {
-                input.m5_key[i] &= static_cast<uint8_t>(~g_m5_text_pulse[i]);
-                g_m5_text_pulse[i] = 0;
+                rewind_one_snapshot(app);
             }
-            if (app.audio_stream && snd.output && snd.sample_count > 0)
-                SDL_PutAudioStreamData(app.audio_stream, snd.output, snd.sample_count * 2 * sizeof(int16_t));
+            else
+            {
+                system_frame(0);
+                app.frame_counter++;
+                for (size_t i = 0; i < SORDM5_KEY_ROWS; i++)
+                {
+                    input.m5_key[i] &= static_cast<uint8_t>(~g_m5_text_pulse[i]);
+                    g_m5_text_pulse[i] = 0;
+                }
+                maybe_capture_rewind(app);
+                maybe_autosave(app);
+                if (app.audio_stream && snd.output && snd.sample_count > 0)
+                    SDL_PutAudioStreamData(app.audio_stream, snd.output, snd.sample_count * 2 * sizeof(int16_t));
+            }
         }
 
         ImGui_ImplSDLRenderer3_NewFrame();

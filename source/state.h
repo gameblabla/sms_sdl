@@ -25,11 +25,45 @@
 #ifndef STATE_H_
 #define STATE_H_
 
-#define STATE_VERSION   0x0104      /* Version 1.4 (BCD) */
-#define STATE_HEADER    "SST\0"     /* State file header */
+#include <stdint.h>
+#include <stdio.h>
 
-/* Function prototypes */
+#define STATE_VERSION   0x0104      /* Legacy raw state payload version 1.4 (BCD) */
+#define STATE_HEADER    "SST\0"     /* Legacy state file header, retained for compatibility. */
+
+#define STATE2_VERSION  0x0200      /* Wrapped/compressed state container version 2.0. */
+#define STATE2_THUMB_XRGB8888 1
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Legacy raw payload entry points.  Existing ports may keep using these. */
 extern uint32_t system_save_state(FILE *fd);
 extern void system_load_state(FILE *fd);
+
+/* Memory-buffer helpers used by rewind and by the state v2 wrapper. */
+extern int system_save_state_buffer(uint8_t **out_data, uint32_t *out_size);
+extern int system_load_state_buffer(const uint8_t *data, uint32_t size);
+extern void system_free_state_buffer(void *data);
+
+/* PNG save states.  The visible image is the thumbnail/screenshot and the
+ * compressed legacy payload is stored in a private PNG chunk.  Loading still
+ * accepts old raw state files and the short-lived SPGXST2 wrapper. */
+extern int system_save_state_png(const char *path,
+                                 const void *thumbnail_xrgb8888,
+                                 uint32_t thumbnail_width,
+                                 uint32_t thumbnail_height,
+                                 uint32_t thumbnail_pitch);
+extern int system_load_state_file(const char *path);
+extern int system_state_png_read_thumbnail(const char *path,
+                                           uint32_t **out_xrgb8888,
+                                           uint32_t *out_width,
+                                           uint32_t *out_height);
+#define system_save_state_file_ex system_save_state_png
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _STATE_H_ */

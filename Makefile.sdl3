@@ -20,9 +20,9 @@ IMGUI_DIR   ?= external/imgui
 
 CORE_DIRS    = ./source ./source/cpu_cores/$(Z80_CORE) ./source/sound ./source/sound/$(SOUND_ENGINE)
 CPP_DIRS     = ./source/ports/sdl3
-VPATH        = $(CORE_DIRS) $(CPP_DIRS) $(IMGUI_DIR) $(IMGUI_DIR)/backends
+VPATH        = $(CORE_DIRS) ./source/unzip $(CPP_DIRS) $(IMGUI_DIR) $(IMGUI_DIR)/backends
 
-CORE_C       = $(foreach dir,$(CORE_DIRS),$(wildcard $(dir)/*.c))
+CORE_C       = $(foreach dir,$(CORE_DIRS),$(wildcard $(dir)/*.c)) ./source/unzip/miniz.c
 PORT_CPP     = $(foreach dir,$(CPP_DIRS),$(wildcard $(dir)/*.cpp))
 IMGUI_CPP    = $(IMGUI_DIR)/imgui.cpp \
                $(IMGUI_DIR)/imgui_demo.cpp \
@@ -40,7 +40,7 @@ SDL3_CFLAGS := $(shell pkg-config --cflags sdl3 2>/dev/null)
 SDL3_LIBS   := $(shell pkg-config --libs sdl3 2>/dev/null)
 
 COMMON_DEFS  = -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DNOZIP_SUPPORT -DSMSPLUS_SDL3 $(PSG_DEFS) $(RENDER_DEFS)
-COMMON_INC   = -Isource -Isource/cpu_cores/$(Z80_CORE) -Isource/ports/sdl3 -Isource/sound -Isource/sound/$(SOUND_ENGINE) -Isource/sound_output
+COMMON_INC   = -Isource -Isource/cpu_cores/$(Z80_CORE) -Isource/ports/sdl3 -Isource/sound -Isource/sound/$(SOUND_ENGINE) -Isource/sound_output -Isource/unzip
 IMGUI_INC    = -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 CFLAGS       = -O2 -g -Wall -Wextra -std=gnu99 $(COMMON_DEFS) $(COMMON_INC) $(SDL3_CFLAGS)
 CXXFLAGS     = -O2 -g -Wall -Wextra -std=c++17 $(COMMON_DEFS) $(COMMON_INC) $(IMGUI_INC) $(SDL3_CFLAGS)

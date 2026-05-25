@@ -22,6 +22,8 @@ typedef struct cli_options
     const char *bios_path;
     const char *sms_bios_path;
     const char *coleco_bios_path;
+    const char *save_state_path;
+    const char *load_state_path;
     uint64_t frames;
     uint8_t skip_render;
     uint8_t force_console;
@@ -47,6 +49,8 @@ static void usage(const char *argv0)
         "  --sms-bios PATH            SMS BIOS file\n"
         "  --coleco-bios PATH         ColecoVision BIOS file\n"
         "  --sram PATH                SRAM save/load path\n"
+        "  --load-state PATH          Load .sgxst or legacy raw state after power-on\n"
+        "  --save-state PATH          Save .sgxst state after the final frame\n"
         "  --no-render                Execute without producing the internal video bitmap\n"
         "  --lcd-persistence          Enable Game Gear LCD persistence filter (default)\n"
         "  --no-lcd-persistence       Disable Game Gear LCD persistence filter\n"
@@ -163,6 +167,8 @@ static int parse_cli(int argc, char **argv, cli_options_t *cli)
         else if (!strcmp(a, "--sms-bios")) { if (!need_value(argc, argv, &i)) return 0; cli->sms_bios_path = argv[i]; }
         else if (!strcmp(a, "--coleco-bios")) { if (!need_value(argc, argv, &i)) return 0; cli->coleco_bios_path = argv[i]; }
         else if (!strcmp(a, "--sram")) { if (!need_value(argc, argv, &i)) return 0; headless_sram_path = argv[i]; }
+        else if (!strcmp(a, "--load-state")) { if (!need_value(argc, argv, &i)) return 0; cli->load_state_path = argv[i]; }
+        else if (!strcmp(a, "--save-state")) { if (!need_value(argc, argv, &i)) return 0; cli->save_state_path = argv[i]; }
         else if (!strcmp(a, "--no-render")) cli->skip_render = 1;
         else if (!strcmp(a, "--input-playback")) { if (!need_value(argc, argv, &i)) return 0; cli->platform.input_playback_path = argv[i]; }
         else if (!strcmp(a, "--input-record")) { if (!need_value(argc, argv, &i)) return 0; cli->platform.input_record_path = argv[i]; }
@@ -382,6 +388,12 @@ int main(int argc, char **argv)
     }
 
     system_poweron();
+    if (cli.load_state_path && !system_load_state_file(cli.load_state_path))
+    {
+        fprintf(stderr, "Failed to load state: %s\n", cli.load_state_path);
+        cleanup();
+        return 1;
+    }
     if (cli.force_lightgun) sms.device[0] = DEVICE_LIGHTGUN;
     input.analog[0][0] = cli.lightgun_x;
     input.analog[0][1] = cli.lightgun_y;
@@ -413,6 +425,15 @@ int main(int argc, char **argv)
 
     if (ok)
         ok = smsplus_headless_platform_save_final(platform, cli.frames);
+
+    if (ok && cli.save_state_path)
+    {
+        if (!system_save_state_file_ex(cli.save_state_path, NULL, 0, 0, 0))
+        {
+            fprintf(stderr, "Failed to save state: %s\n", cli.save_state_path);
+            ok = 0;
+        }
+    }
 
     smsplus_headless_platform_destroy(platform);
     cleanup();
