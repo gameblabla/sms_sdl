@@ -49,8 +49,8 @@ static void usage(const char *argv0)
         "  --sms-bios PATH            SMS BIOS file\n"
         "  --coleco-bios PATH         ColecoVision BIOS file\n"
         "  --sram PATH                SRAM save/load path\n"
-        "  --load-state PATH          Load .sgxst or legacy raw state after power-on\n"
-        "  --save-state PATH          Save .sgxst state after the final frame\n"
+        "  --load-state PATH          Load PNG/.sgxst/legacy raw state after power-on\n"
+        "  --save-state PATH          Save PNG state after the final frame\n"
         "  --no-render                Execute without producing the internal video bitmap\n"
         "  --lcd-persistence          Enable Game Gear LCD persistence filter (default)\n"
         "  --no-lcd-persistence       Disable Game Gear LCD persistence filter\n"
@@ -347,6 +347,47 @@ static int init_bitmap(void)
     return 1;
 }
 
+
+static uint32_t headless_read_xrgb8888(uint32_t x, uint32_t y)
+{
+    if (!bitmap.data || x >= bitmap.width || y >= bitmap.height)
+        return 0xff000000u;
+#ifdef SMSPLUS_RENDER_32BPP
+    return ((const uint32_t *)(const void *)(bitmap.data + (size_t)y * bitmap.pitch))[x] | 0xff000000u;
+#else
+    {
+        uint16_t p = ((const uint16_t *)(const void *)(bitmap.data + (size_t)y * bitmap.pitch))[x];
+        uint32_t r = ((p >> 11) & 0x1f) * 255u / 31u;
+        uint32_t g = ((p >> 5) & 0x3f) * 255u / 63u;
+        uint32_t b = (p & 0x1f) * 255u / 31u;
+        return 0xff000000u | (r << 16) | (g << 8) | b;
+    }
+#endif
+}
+
+static uint32_t *capture_state_thumbnail(uint32_t *out_w, uint32_t *out_h, uint32_t *out_pitch)
+{
+    uint32_t x0 = (uint32_t)((bitmap.viewport.x < 0) ? 0 : bitmap.viewport.x);
+    uint32_t w = (uint32_t)((bitmap.viewport.w > 0) ? bitmap.viewport.w : 256);
+    uint32_t h = (uint32_t)((bitmap.viewport.h > 0) ? bitmap.viewport.h : vdp.height);
+    uint32_t *pixels;
+    uint32_t x, y;
+
+    if (!out_w || !out_h || !out_pitch || !bitmap.data || w == 0 || h == 0)
+        return NULL;
+    if (x0 + w > bitmap.width) w = bitmap.width - x0;
+    if (h > bitmap.height) h = bitmap.height;
+    pixels = (uint32_t *)malloc((size_t)w * h * sizeof(uint32_t));
+    if (!pixels) return NULL;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++)
+            pixels[(size_t)y * w + x] = headless_read_xrgb8888(x0 + x, y);
+    *out_w = w;
+    *out_h = h;
+    *out_pitch = w * 4;
+    return pixels;
+}
+
 static void cleanup(void)
 {
     system_poweroff();
@@ -428,11 +469,14 @@ int main(int argc, char **argv)
 
     if (ok && cli.save_state_path)
     {
-        if (!system_save_state_file_ex(cli.save_state_path, NULL, 0, 0, 0))
+        uint32_t thumb_w = 0, thumb_h = 0, thumb_pitch = 0;
+        uint32_t *thumb = capture_state_thumbnail(&thumb_w, &thumb_h, &thumb_pitch);
+        if (!system_save_state_file_ex(cli.save_state_path, thumb, thumb_w, thumb_h, thumb_pitch))
         {
             fprintf(stderr, "Failed to save state: %s\n", cli.save_state_path);
             ok = 0;
         }
+        free(thumb);
     }
 
     smsplus_headless_platform_destroy(platform);

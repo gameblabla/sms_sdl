@@ -158,6 +158,30 @@ static std::array<Binding, ACT_COUNT> g_bindings = {{
     {"Rewind", SDL_SCANCODE_F6, SDL_GAMEPAD_BUTTON_INVALID},
 }};
 
+struct ColecoKeyBinding
+{
+    const char *name;
+    uint8_t value;
+    SDL_Scancode scan;
+    SDL_Scancode alt_scan;
+    SDL_GamepadButton button;
+};
+
+static std::array<ColecoKeyBinding, 12> g_coleco_key_bindings = {{
+    {"Keypad 0", 0,  SDL_SCANCODE_0, SDL_SCANCODE_KP_0, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad 1", 1,  SDL_SCANCODE_1, SDL_SCANCODE_KP_1, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad 2", 2,  SDL_SCANCODE_2, SDL_SCANCODE_KP_2, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad 3", 3,  SDL_SCANCODE_3, SDL_SCANCODE_KP_3, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad 4", 4,  SDL_SCANCODE_4, SDL_SCANCODE_KP_4, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad 5", 5,  SDL_SCANCODE_5, SDL_SCANCODE_KP_5, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad 6", 6,  SDL_SCANCODE_6, SDL_SCANCODE_KP_6, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad 7", 7,  SDL_SCANCODE_7, SDL_SCANCODE_KP_7, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad 8", 8,  SDL_SCANCODE_8, SDL_SCANCODE_KP_8, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad 9", 9,  SDL_SCANCODE_9, SDL_SCANCODE_KP_9, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad *", 10, SDL_SCANCODE_APOSTROPHE, SDL_SCANCODE_KP_MULTIPLY, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Keypad #", 11, SDL_SCANCODE_BACKSLASH, SDL_SCANCODE_KP_HASH, SDL_GAMEPAD_BUTTON_INVALID},
+}};
+
 struct M5Key
 {
     const char *label;
@@ -233,6 +257,9 @@ struct AppState
     bool paused = false;
     int capture_binding = -1;
     int capture_gamepad_binding = -1;
+    int capture_coleco_key_binding = -1;
+    int capture_coleco_alt_key_binding = -1;
+    int capture_coleco_gamepad_binding = -1;
     int vk_index = 0;
     int save_slot = 0;
     uint64_t frame_counter = 0;
@@ -240,10 +267,15 @@ struct AppState
     uint64_t last_rewind_capture_frame = 0;
     bool autosave_enabled = true;
     bool rewind_enabled = true;
-    bool rewind_hold = false;
+    bool rewind_hold = false;          // physical hotkey/gamepad hold state
+    bool rewind_ui_hold = false;       // ImGui hold state carried from previous frame
+    bool rewind_ui_hold_next = false;
+    bool rewind_was_active = false;
     int autosave_interval_frames = 600;
-    int rewind_interval_frames = 10;
-    size_t rewind_max_snapshots = 360;
+    int rewind_interval_frames = 4;
+    int rewind_step_display_frames = 2;
+    int rewind_display_counter = 0;
+    size_t rewind_max_snapshots = 900;
     std::vector<RewindSnapshot> rewind_snapshots;
     std::filesystem::path state_dir;
     std::filesystem::path save_dir;
@@ -628,6 +660,20 @@ static void capture_rewind_snapshot(AppState &app)
     app.last_rewind_capture_frame = app.frame_counter;
 }
 
+static void render_loaded_state_preview_frame()
+{
+    /*
+     * Save states restore VDP/VRAM/CRAM/registers, not the host framebuffer.
+     * For Nintendo-Online-style rewind feedback, repaint the current VDP state
+     * immediately after each rewind step without running CPU/audio forward.
+     */
+    int32_t old_line = vdp.line;
+    text_counter = 0;
+    for (vdp.line = 0; vdp.line < vdp.lpf; vdp.line++)
+        render_line(vdp.line);
+    vdp.line = old_line;
+}
+
 static bool rewind_one_snapshot(AppState &app)
 {
     if (!app.rom_loaded || app.rewind_snapshots.empty()) return false;
@@ -638,11 +684,48 @@ static bool rewind_one_snapshot(AppState &app)
         if (system_load_state_buffer(snap.data.data(), static_cast<uint32_t>(snap.data.size())))
         {
             app.frame_counter = snap.frame;
-            app.status = "Rewound to frame " + std::to_string(static_cast<unsigned long long>(snap.frame));
+            render_loaded_state_preview_frame();
+            app.status = "Rewinding... frame " + std::to_string(static_cast<unsigned long long>(snap.frame));
             return true;
         }
     }
     return false;
+}
+
+static bool rewind_active(const AppState &app)
+{
+    return app.rewind_enabled && app.rom_loaded && (app.rewind_hold || app.rewind_ui_hold);
+}
+
+static void run_rewind(AppState &app)
+{
+    if (!rewind_active(app))
+    {
+        if (app.rewind_was_active)
+        {
+            app.rewind_display_counter = 0;
+            app.status = "Rewind released; resumed from frame " +
+                         std::to_string(static_cast<unsigned long long>(app.frame_counter));
+        }
+        app.rewind_was_active = false;
+        return;
+    }
+
+    if (!app.rewind_was_active)
+    {
+        app.rewind_was_active = true;
+        app.rewind_display_counter = 0;
+        app.status = "Rewind: hold to move backward, release to resume.";
+    }
+
+    if (app.rewind_snapshots.empty())
+    {
+        app.status = "Rewind buffer empty.";
+        return;
+    }
+
+    if ((app.rewind_display_counter++ % std::max(1, app.rewind_step_display_frames)) == 0)
+        rewind_one_snapshot(app);
 }
 
 static void maybe_autosave(AppState &app)
@@ -655,8 +738,9 @@ static void maybe_autosave(AppState &app)
 
 static void maybe_capture_rewind(AppState &app)
 {
-    if (!app.rewind_enabled || !app.rom_loaded) return;
-    if (app.frame_counter - app.last_rewind_capture_frame >= static_cast<uint64_t>(app.rewind_interval_frames))
+    if (!app.rewind_enabled || !app.rom_loaded || rewind_active(app)) return;
+    if (app.rewind_snapshots.empty() ||
+        app.frame_counter - app.last_rewind_capture_frame >= static_cast<uint64_t>(app.rewind_interval_frames))
         capture_rewind_snapshot(app);
 }
 
@@ -748,6 +832,10 @@ static bool load_game(AppState &app, const std::string &path)
     app.last_autosave_frame = 0;
     app.last_rewind_capture_frame = 0;
     app.rewind_hold = false;
+    app.rewind_ui_hold = false;
+    app.rewind_ui_hold_next = false;
+    app.rewind_was_active = false;
+    app.rewind_display_counter = 0;
     app.rewind_snapshots.clear();
     ensure_state_dir(app.state_dir);
     invalidate_state_thumbnail(app);
@@ -858,27 +946,32 @@ static void update_keyboard_state_from_bindings()
     }
 }
 
-static void update_coleco_keypad_from_keyboard()
+static bool keyboard_scancode_down(const bool *state, int nkeys, SDL_Scancode sc)
+{
+    return state && sc > SDL_SCANCODE_UNKNOWN && sc < nkeys && state[sc];
+}
+
+static void update_coleco_keypad_from_inputs(AppState &app)
 {
     if (sms.console != CONSOLE_COLECO) return;
+
     int nkeys = 0;
     const bool *state = SDL_GetKeyboardState(&nkeys);
     coleco.keypad[0] = 0xff;
     coleco.keypad[1] = 0xff;
-    if (!state) return;
-    auto down = [&](SDL_Scancode sc) { return sc > SDL_SCANCODE_UNKNOWN && sc < nkeys && state[sc]; };
-    if (down(SDL_SCANCODE_0) || down(SDL_SCANCODE_KP_0)) coleco.keypad[0] = 0;
-    else if (down(SDL_SCANCODE_1) || down(SDL_SCANCODE_KP_1)) coleco.keypad[0] = 1;
-    else if (down(SDL_SCANCODE_2) || down(SDL_SCANCODE_KP_2)) coleco.keypad[0] = 2;
-    else if (down(SDL_SCANCODE_3) || down(SDL_SCANCODE_KP_3)) coleco.keypad[0] = 3;
-    else if (down(SDL_SCANCODE_4) || down(SDL_SCANCODE_KP_4)) coleco.keypad[0] = 4;
-    else if (down(SDL_SCANCODE_5) || down(SDL_SCANCODE_KP_5)) coleco.keypad[0] = 5;
-    else if (down(SDL_SCANCODE_6) || down(SDL_SCANCODE_KP_6)) coleco.keypad[0] = 6;
-    else if (down(SDL_SCANCODE_7) || down(SDL_SCANCODE_KP_7)) coleco.keypad[0] = 7;
-    else if (down(SDL_SCANCODE_8) || down(SDL_SCANCODE_KP_8)) coleco.keypad[0] = 8;
-    else if (down(SDL_SCANCODE_9) || down(SDL_SCANCODE_KP_9)) coleco.keypad[0] = 9;
-    else if (down(SDL_SCANCODE_KP_MULTIPLY) || down(SDL_SCANCODE_APOSTROPHE)) coleco.keypad[0] = 10;
-    else if (down(SDL_SCANCODE_KP_HASH) || down(SDL_SCANCODE_BACKSLASH)) coleco.keypad[0] = 11;
+
+    for (const ColecoKeyBinding &binding : g_coleco_key_bindings)
+    {
+        bool pressed = keyboard_scancode_down(state, nkeys, binding.scan) ||
+                       keyboard_scancode_down(state, nkeys, binding.alt_scan);
+        if (!pressed && app.gamepad && binding.button != SDL_GAMEPAD_BUTTON_INVALID)
+            pressed = SDL_GetGamepadButton(app.gamepad, binding.button);
+        if (pressed)
+        {
+            coleco.keypad[0] = binding.value;
+            return;
+        }
+    }
 }
 
 static SDL_FRect compute_dest_rect(const UiSettings &ui, int active_w, int active_h, int win_w, int win_h);
@@ -997,6 +1090,12 @@ static void handle_gamepad_button(AppState &app, SDL_GamepadButton button, bool 
         app.capture_gamepad_binding = -1;
         return;
     }
+    if (app.capture_coleco_gamepad_binding >= 0 && down)
+    {
+        g_coleco_key_bindings[app.capture_coleco_gamepad_binding].button = button;
+        app.capture_coleco_gamepad_binding = -1;
+        return;
+    }
 
     for (int i = 0; i < ACT_COUNT; i++)
     {
@@ -1045,6 +1144,8 @@ static void parse_args(AppState &app, int argc, char **argv)
         else if (!std::strcmp(a, "--no-audio")) app.ui.audio = false;
         else if (!std::strcmp(a, "--no-autosave")) app.autosave_enabled = false;
         else if (!std::strcmp(a, "--no-rewind")) app.rewind_enabled = false;
+        else if (!std::strcmp(a, "--rewind-interval")) { if (const char *v = need(a)) app.rewind_interval_frames = std::max(1, std::atoi(v)); }
+        else if (!std::strcmp(a, "--rewind-steps")) { if (const char *v = need(a)) app.rewind_max_snapshots = static_cast<size_t>(std::max(1, std::atoi(v))); }
         else if (!std::strcmp(a, "--lightgun")) app.ui.force_lightgun = true;
         else if (!std::strcmp(a, "--no-mouse-lightgun")) app.ui.mouse_lightgun = false;
         else if (!std::strcmp(a, "--lightgun-cursor")) { app.ui.show_lightgun_cursor = true; option.lightgun_cursor = 1; }
@@ -1156,6 +1257,24 @@ static void draw_keyboard_controls(AppState &app)
             app.capture_binding = i;
         ImGui::PopID();
     }
+    ImGui::Separator();
+    ImGui::TextUnformatted("ColecoVision keypad remapping");
+    ImGui::TextUnformatted("Each keypad entry has a primary key and an alternate key. Defaults are number-row plus PC numpad.");
+    for (int i = 0; i < static_cast<int>(g_coleco_key_bindings.size()); i++)
+    {
+        ColecoKeyBinding &binding = g_coleco_key_bindings[i];
+        ImGui::PushID(2000 + i);
+        ImGui::Text("%-12s", binding.name);
+        ImGui::SameLine(150);
+        const char *primary = SDL_GetScancodeName(binding.scan);
+        if (ImGui::Button(app.capture_coleco_key_binding == i ? "press primary..." : (primary && primary[0] ? primary : "Unbound"), ImVec2(150, 0)))
+            app.capture_coleco_key_binding = i;
+        ImGui::SameLine();
+        const char *alt = SDL_GetScancodeName(binding.alt_scan);
+        if (ImGui::Button(app.capture_coleco_alt_key_binding == i ? "press alternate..." : (alt && alt[0] ? alt : "Unbound"), ImVec2(150, 0)))
+            app.capture_coleco_alt_key_binding = i;
+        ImGui::PopID();
+    }
     ImGui::TextWrapped("M5 keyboard is direct: PC number keys 1/2 drive the M5 rows used by Pooyan. Text events are also accepted so non-QWERTY layouts can enter logical characters.");
 }
 
@@ -1170,6 +1289,20 @@ static void draw_controller_controls(AppState &app)
         ImGui::SameLine(220);
         if (ImGui::Button(app.capture_gamepad_binding == i ? "press a button..." : gamepad_button_name(g_bindings[i].button), ImVec2(160, 0)))
             app.capture_gamepad_binding = i;
+        ImGui::PopID();
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("ColecoVision keypad");
+    ImGui::TextUnformatted("Optional controller mappings for keypad digits, star, and pound.");
+    for (int i = 0; i < static_cast<int>(g_coleco_key_bindings.size()); i++)
+    {
+        ColecoKeyBinding &binding = g_coleco_key_bindings[i];
+        ImGui::PushID(3000 + i);
+        ImGui::Text("%-12s", binding.name);
+        ImGui::SameLine(220);
+        if (ImGui::Button(app.capture_coleco_gamepad_binding == i ? "press a button..." : gamepad_button_name(binding.button), ImVec2(160, 0)))
+            app.capture_coleco_gamepad_binding = i;
         ImGui::PopID();
     }
 
@@ -1232,9 +1365,14 @@ static void draw_states(AppState &app)
 
     ImGui::Checkbox("Rewind", &app.rewind_enabled);
     ImGui::SameLine();
-    ImGui::Text("snapshots: %d", static_cast<int>(app.rewind_snapshots.size()));
-    if (ImGui::Button("Rewind one step")) rewind_one_snapshot(app);
-    ImGui::TextWrapped("Hotkeys: F5 saves, F8 loads, hold F6 to rewind. State files are PNG images with an embedded compressed save-state chunk, so the thumbnail is visible outside the emulator too.");
+    ImGui::Text("snapshots: %d / %d", static_cast<int>(app.rewind_snapshots.size()), static_cast<int>(app.rewind_max_snapshots));
+    if (ImGui::Button("Hold to rewind", ImVec2(150, 0))) {}
+    if (ImGui::IsItemActive()) app.rewind_ui_hold_next = true;
+    ImGui::SameLine();
+    ImGui::Text("%s", rewind_active(app) ? "rewinding" : "ready");
+    ImGui::Text("Capture every %d emulated frames; playback step every %d display frames.",
+                app.rewind_interval_frames, app.rewind_step_display_frames);
+    ImGui::TextWrapped("Hotkeys: F5 saves, F8 loads, hold F6 or the controller Rewind binding to scrub backward continuously. Release to resume from the selected point. State files are PNG images with an embedded compressed save-state chunk, so the thumbnail is visible outside the emulator too.");
 }
 
 static void draw_virtual_keyboard(AppState &app)
@@ -1340,6 +1478,18 @@ static void handle_event(AppState &app, const SDL_Event &e)
             {
                 g_bindings[app.capture_binding].scan = e.key.scancode;
                 app.capture_binding = -1;
+                break;
+            }
+            if (app.capture_coleco_key_binding >= 0 && down)
+            {
+                g_coleco_key_bindings[app.capture_coleco_key_binding].scan = e.key.scancode;
+                app.capture_coleco_key_binding = -1;
+                break;
+            }
+            if (app.capture_coleco_alt_key_binding >= 0 && down)
+            {
+                g_coleco_key_bindings[app.capture_coleco_alt_key_binding].alt_scan = e.key.scancode;
+                app.capture_coleco_alt_key_binding = -1;
                 break;
             }
             for (int i = 0; i < ACT_COUNT; i++)
@@ -1492,21 +1642,25 @@ int main(int argc, char **argv)
 
     while (app.running)
     {
+        app.rewind_ui_hold = app.rewind_ui_hold_next;
+        app.rewind_ui_hold_next = false;
+
         SDL_Event e;
         while (SDL_PollEvent(&e)) handle_event(app, e);
         update_keyboard_state_from_bindings();
-        update_coleco_keypad_from_keyboard();
+        update_coleco_keypad_from_inputs(app);
         update_virtual_keyboard_gamepad(app);
         update_lightgun_mouse(app);
 
         if (app.rom_loaded && !app.paused)
         {
-            if (app.rewind_hold && app.rewind_enabled)
+            if (rewind_active(app))
             {
-                rewind_one_snapshot(app);
+                run_rewind(app);
             }
             else
             {
+                run_rewind(app); /* clears one-shot rewind state after release */
                 system_frame(0);
                 app.frame_counter++;
                 for (size_t i = 0; i < SORDM5_KEY_ROWS; i++)

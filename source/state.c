@@ -395,7 +395,6 @@ static int write_png_chunk(FILE *fd, const char type[4], const void *data, uint3
     put_be32(len_be, size);
     crc = (uint32_t)mz_crc32(MZ_CRC32_INIT, (const unsigned char *)type, 4);
     if (data && size) crc = (uint32_t)mz_crc32(crc, (const unsigned char *)data, size);
-    crc ^= 0xffffffffu;
     if (fwrite(len_be, 1, 4, fd) != 4 || fwrite(type, 1, 4, fd) != 4) return 0;
     if (size && fwrite(data, 1, size, fd) != size) return 0;
     put_be32(len_be, crc);
@@ -484,8 +483,12 @@ int system_save_state_png(const char *path,
     if (!fd) goto done;
     if (fwrite(sig, 1, sizeof(sig), fd) != sizeof(sig)) goto done;
     if (!write_png_chunk(fd, "IHDR", ihdr, sizeof(ihdr))) goto done;
-    if (!write_png_chunk(fd, "stAt", state_chunk, 32 + (uint32_t)sizeof(extra) + payload_size)) goto done;
     if (!write_png_chunk(fd, "IDAT", idat, idat_size)) goto done;
+    /* Keep the emulator state in a private ancillary chunk after IDAT.
+     * This keeps the file as a normal previewable PNG first, with the save
+     * payload carried like PICO-8-style PNG cartridges rather than replacing
+     * the visible image. */
+    if (!write_png_chunk(fd, "stAt", state_chunk, 32 + (uint32_t)sizeof(extra) + payload_size)) goto done;
     if (!write_png_chunk(fd, "IEND", NULL, 0)) goto done;
     ok = 1;
 
