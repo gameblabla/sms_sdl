@@ -124,13 +124,25 @@
 #define INLINE static __inline__
 
 Z80_Regs Z80;
+static Z80_Regs * const z80_default_context = &Z80;
+static Z80_Regs *z80_active_context = &Z80;
+#define Z80 (*z80_active_context)
 
 int32_t z80_cycle_count = 0;        /* running total of cycles executed */
+static int32_t * const z80_default_cycle_count = &z80_cycle_count;
+static int32_t *z80_active_cycle_count = &z80_cycle_count;
 static int32_t z80_exec = 0;
 static int32_t z80_requested_cycles = 0;
 
 uint8_t *cpu_readmap[64];
 uint8_t *cpu_writemap[64];
+static uint8_t **z80_active_readmap = cpu_readmap;
+static uint8_t **z80_active_writemap = cpu_writemap;
+uint8_t z80_data_operand_fetch = 0;
+
+#define Z80_CYCLE_COUNT (*z80_active_cycle_count)
+#define Z80_READMAP z80_active_readmap
+#define Z80_WRITEMAP z80_active_writemap
 
 void (*cpu_writemem16)(uint16_t address, uint8_t data);
 void (*cpu_writeport16)(uint16_t port, uint8_t data);
@@ -145,14 +157,27 @@ extern uint8_t sms_readmem16(uint16_t address);
 /* Current upstream MAME does not latch an NMI on the same edge that clears
  * RESET.  SMS Plus GX does not expose a RESET input line to this C port, so use
  * the elapsed-cycle counter as the nearest equivalent guard. */
-#define Z80_HAS_EXECUTED() (z80_cycle_count != 0 || z80_exec != 0)
+#define Z80_HAS_EXECUTED() (Z80_CYCLE_COUNT != 0 || z80_exec != 0)
 
-#define cpu_readmem16(a) sms_readmem16((uint16_t)(a))
 /* Opcode fetches are intentionally a direct page-table lookup.  Mappers
  * that need bank switching should keep cpu_readmap[] current rather than
  * adding per-fetch branches here. */
-#define cpu_readop(a) cpu_readmap[(a) >> 10][(a) & 0x03FF]
-#define cpu_readop_arg(a) cpu_readop(a)
+#define cpu_readop(a) Z80_READMAP[(a) >> 10][(a) & 0x03FF]
+
+INLINE uint8_t z80_fast_readmem(uint32_t address)
+{
+	uint16_t a = (uint16_t)address;
+	/* Psycho Soldier's three Z80s execute almost entirely from ROM and shared
+	 * RAM.  The mapper still owns C000-CFFF I/O latches, but ROM and mapped RAM
+	 * reads can avoid the generic mapper callback.  Standard SMS/System1 paths
+	 * continue using sms_readmem16(). */
+	if (slot.mapper == MAPPER_SNKPSYCHOS && a < 0xc000)
+		return Z80_READMAP[a >> 10][a & 0x03FF];
+	return sms_readmem16(a);
+}
+
+#define cpu_readmem16(a) z80_fast_readmem((a))
+#define cpu_readop_arg(a) (z80_data_operand_fetch ? sms_readmem16((uint16_t)(a)) : cpu_readop(a))
 
 /****************************************************************************/
 /* The Z80 registers. halt is set to 1 when the CPU is halted, the refresh  */
@@ -589,7 +614,18 @@ INLINE uint8_t rm(uint32_t addr)
  ***************************************************************/
 INLINE void wm(uint32_t addr, uint8_t value)
 {
-	cpu_writemem16(addr, value);
+	uint16_t a = (uint16_t)addr;
+	if (slot.mapper == MAPPER_SNKPSYCHOS && a >= 0xd000 && a < 0xf800)
+	{
+		uint8_t *page = Z80_WRITEMAP[a >> 10];
+		if (page != dummy_write)
+		{
+			SMSPLUS_TRACE_MEM_WRITE(a, value);
+			page[a & 0x03FF] = value;
+			return;
+		}
+	}
+	cpu_writemem16(a, value);
 }
 
 /***************************************************************
@@ -3364,19 +3400,59 @@ static inline void take_nmi()
 }
 
 
+void z80_select_context(Z80_Regs *regs, int32_t *cycle_counter)
+{
+	z80_active_context = regs ? regs : z80_default_context;
+	z80_active_cycle_count = cycle_counter ? cycle_counter : z80_default_cycle_count;
+}
+
+void z80_select_default_context(void)
+{
+	z80_active_context = z80_default_context;
+	z80_active_cycle_count = z80_default_cycle_count;
+	z80_active_readmap = cpu_readmap;
+	z80_active_writemap = cpu_writemap;
+}
+
+Z80_Regs *z80_get_context(void)
+{
+	return z80_active_context;
+}
+
+void z80_select_opcode_map(uint8_t **readmap)
+{
+	z80_active_readmap = readmap ? readmap : cpu_readmap;
+}
+
+void z80_select_memory_maps(uint8_t **readmap, uint8_t **writemap)
+{
+	z80_active_readmap = readmap ? readmap : cpu_readmap;
+	z80_active_writemap = writemap ? writemap : cpu_writemap;
+}
+
+void z80_select_default_opcode_map(void)
+{
+	z80_active_readmap = cpu_readmap;
+	z80_active_writemap = cpu_writemap;
+}
+
+static int z80_tables_initialized = 0;
+
 /****************************************************************************
  * Processor initialization
  ****************************************************************************/
 void z80_init(int32_t (*irqcallback)(int32_t))
 {
-	int32_t i, p;
-	int32_t oldval, newval, val;
-	uint8_t *padd = &SZHVC_add[  0*256];
-	uint8_t *padc = &SZHVC_add[256*256];
-	uint8_t *psub = &SZHVC_sub[  0*256];
-	uint8_t *psbc = &SZHVC_sub[256*256];
-	
-	for (oldval = 0; oldval < 256; oldval++)
+	if (!z80_tables_initialized)
+	{
+		int32_t i, p;
+		int32_t oldval, newval, val;
+		uint8_t *padd = &SZHVC_add[  0*256];
+		uint8_t *padc = &SZHVC_add[256*256];
+		uint8_t *psub = &SZHVC_sub[  0*256];
+		uint8_t *psbc = &SZHVC_sub[256*256];
+		
+		for (oldval = 0; oldval < 256; oldval++)
 	{
 		for (newval = 0; newval < 256; newval++)
 		{
@@ -3440,6 +3516,9 @@ void z80_init(int32_t (*irqcallback)(int32_t))
 		SZHV_dec[i] = SZ[i] | NF;
 		if( i == 0x7f ) SZHV_dec[i] |= VF;
 		if( (i & 0x0f) == 0x0f ) SZHV_dec[i] |= HF;
+	}
+
+		z80_tables_initialized = 1;
 	}
 
 	/* Reset registers to their initial values */
@@ -3563,7 +3642,7 @@ int32_t z80_execute(int32_t cycles)
 	} while (Z80.icount > 0);
 
 	z80_exec = 0;
-	z80_cycle_count += (cycles - Z80.icount);
+	Z80_CYCLE_COUNT += (cycles - Z80.icount);
 	
 	return cycles - Z80.icount;
 }
@@ -3596,12 +3675,12 @@ void z80_set_irq_line(int32_t inputnum, int32_t state)
 
 void z80_reset_cycle_count(void)
 {
-	z80_cycle_count = 0;
+	Z80_CYCLE_COUNT = 0;
 }
 
 int32_t z80_get_elapsed_cycles(void)
 {
 	// inside execution loop
-	if(z80_exec == 1) return z80_cycle_count + (z80_requested_cycles - Z80.icount);
-	return z80_cycle_count;
+	if(z80_exec == 1) return Z80_CYCLE_COUNT + (z80_requested_cycles - Z80.icount);
+	return Z80_CYCLE_COUNT;
 }

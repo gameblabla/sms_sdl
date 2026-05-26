@@ -468,6 +468,9 @@ typedef void *const voidpc;
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef SMSPLUS_STATIC_MEMORY
+#include "static_alloc.h"
+#endif
 
 /* ------------------- Types and macros */
 typedef unsigned char mz_uint8;

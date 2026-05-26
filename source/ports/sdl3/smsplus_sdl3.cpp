@@ -29,6 +29,9 @@ extern "C" {
 #ifndef SDL_BUTTON_LMASK
 #define SDL_BUTTON_LMASK 0x01u
 #endif
+#ifndef SDL_SCANCODE_F2
+#define SDL_SCANCODE_F2 ((SDL_Scancode)59)
+#endif
 #ifndef SDL_SCANCODE_F5
 #define SDL_SCANCODE_F5 ((SDL_Scancode)62)
 #endif
@@ -94,7 +97,7 @@ static void *g_pixels = nullptr;
 static std::string g_sram_path;
 static uint8_t g_m5_text_pulse[SORDM5_KEY_ROWS];
 
-static constexpr int BITMAP_W = 256;
+static constexpr int BITMAP_W = 400;
 static constexpr int BITMAP_H = 313;
 
 struct UiSettings
@@ -182,6 +185,23 @@ static std::array<ColecoKeyBinding, 12> g_coleco_key_bindings = {{
     {"Keypad #", 11, SDL_SCANCODE_BACKSLASH, SDL_SCANCODE_KP_HASH, SDL_GAMEPAD_BUTTON_INVALID},
 }};
 
+struct ArcadeBinding
+{
+    const char *name;
+    uint8_t mask;
+    SDL_Scancode scan;
+    SDL_GamepadButton button;
+};
+
+static std::array<ArcadeBinding, 6> g_arcade_bindings = {{
+    {"Coin 1",   INPUT_ARCADE_COIN1,   SDL_SCANCODE_5, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER},
+    {"Coin 2",   INPUT_ARCADE_COIN2,   SDL_SCANCODE_6, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER},
+    {"Service",  INPUT_ARCADE_SERVICE, SDL_SCANCODE_9, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Test",     INPUT_ARCADE_TEST,    SDL_SCANCODE_F2, SDL_GAMEPAD_BUTTON_INVALID},
+    {"Start 1",  INPUT_ARCADE_START1,  SDL_SCANCODE_1, SDL_GAMEPAD_BUTTON_START},
+    {"Start 2",  INPUT_ARCADE_START2,  SDL_SCANCODE_2, SDL_GAMEPAD_BUTTON_INVALID},
+}};
+
 struct M5Key
 {
     const char *label;
@@ -260,6 +280,10 @@ struct AppState
     int capture_coleco_key_binding = -1;
     int capture_coleco_alt_key_binding = -1;
     int capture_coleco_gamepad_binding = -1;
+    int capture_arcade_key_binding = -1;
+    int capture_arcade_gamepad_binding = -1;
+    uint8_t arcade_ui_mask = 0;
+    uint8_t arcade_ui_mask_next = 0;
     int vk_index = 0;
     int save_slot = 0;
     uint64_t frame_counter = 0;
@@ -284,6 +308,7 @@ struct AppState
     std::filesystem::path state_thumb_path;
     int state_thumb_w = 0;
     int state_thumb_h = 0;
+    int menu_hint_frames = 0;
 };
 
 static void set_defaults()
@@ -340,6 +365,9 @@ static uint8_t console_option_from_name(const char *name)
 {
     if (!name) return 0;
     if (!SDL_strcasecmp(name, "sordm5") || !SDL_strcasecmp(name, "m5")) return 7;
+    if (!SDL_strcasecmp(name, "systeme") || !SDL_strcasecmp(name, "segae")) return 8;
+    if (!SDL_strcasecmp(name, "system1") || !SDL_strcasecmp(name, "segas1") || !SDL_strcasecmp(name, "sega1")) return 9;
+    if (!SDL_strcasecmp(name, "psychos") || !SDL_strcasecmp(name, "snkpsychos") || !SDL_strcasecmp(name, "snk")) return 10;
     if (!SDL_strcasecmp(name, "coleco") || !SDL_strcasecmp(name, "colecovision")) return 6;
     if (!SDL_strcasecmp(name, "gg")) return 3;
     if (!SDL_strcasecmp(name, "ggms")) return 4;
@@ -828,6 +856,8 @@ static bool load_game(AppState &app, const std::string &path)
     }
     app.rom_loaded = true;
     app.paused = false;
+    app.ui.show_menu = false;
+    app.menu_hint_frames = 90;
     app.frame_counter = 0;
     app.last_autosave_frame = 0;
     app.last_rewind_capture_frame = 0;
@@ -835,6 +865,9 @@ static bool load_game(AppState &app, const std::string &path)
     app.rewind_ui_hold = false;
     app.rewind_ui_hold_next = false;
     app.rewind_was_active = false;
+    app.arcade_ui_mask = 0;
+    app.arcade_ui_mask_next = 0;
+    input.arcade = 0;
     app.rewind_display_counter = 0;
     app.rewind_snapshots.clear();
     ensure_state_dir(app.state_dir);
@@ -901,8 +934,44 @@ static void m5_key_from_text(const char *txt)
     }
 }
 
+static bool arcade_machine_active()
+{
+    return sms.console == CONSOLE_SYSTEME || sms.console == CONSOLE_SYSTEM1 || sms.console == CONSOLE_SNKPSYCHOS;
+}
+
+static bool keyboard_scancode_down(const bool *state, int nkeys, SDL_Scancode sc);
+
+static bool action_is_machine_specific(Action action)
+{
+    return action == ACT_M5_1 || action == ACT_M5_2 || action == ACT_PAUSE;
+}
+
+static void update_arcade_state_from_inputs(AppState &app)
+{
+    if (!arcade_machine_active())
+    {
+        input.arcade = 0;
+        return;
+    }
+
+    uint8_t arcade = app.arcade_ui_mask;
+    int nkeys = 0;
+    const bool *state = SDL_GetKeyboardState(&nkeys);
+    for (const ArcadeBinding &binding : g_arcade_bindings)
+    {
+        if (keyboard_scancode_down(state, nkeys, binding.scan))
+            arcade |= binding.mask;
+        if (app.gamepad && binding.button != SDL_GAMEPAD_BUTTON_INVALID &&
+            SDL_GetGamepadButton(app.gamepad, binding.button))
+            arcade |= binding.mask;
+    }
+    input.arcade = arcade;
+}
+
 static void apply_action(Action action, bool down)
 {
+    if (arcade_machine_active() && action_is_machine_specific(action)) return;
+
     switch (action)
     {
         case ACT_UP:    if (down) input.pad[0] |= INPUT_UP; else input.pad[0] &= ~INPUT_UP; break;
@@ -1096,6 +1165,12 @@ static void handle_gamepad_button(AppState &app, SDL_GamepadButton button, bool 
         app.capture_coleco_gamepad_binding = -1;
         return;
     }
+    if (app.capture_arcade_gamepad_binding >= 0 && down)
+    {
+        g_arcade_bindings[app.capture_arcade_gamepad_binding].button = button;
+        app.capture_arcade_gamepad_binding = -1;
+        return;
+    }
 
     for (int i = 0; i < ACT_COUNT; i++)
     {
@@ -1244,11 +1319,36 @@ static void draw_browser(AppState &app)
     ImGui::EndChild();
 }
 
+static void draw_arcade_keyboard_controls(AppState &app)
+{
+    ImGui::TextUnformatted("Sega arcade inputs");
+    ImGui::TextUnformatted("Defaults: 5=Coin 1, 6=Coin 2, 1=Start 1, 2=Start 2, 9=Service, F2=Test.");
+    for (int i = 0; i < static_cast<int>(g_arcade_bindings.size()); i++)
+    {
+        ArcadeBinding &binding = g_arcade_bindings[i];
+        ImGui::PushID(5000 + i);
+        ImGui::Text("%-12s", binding.name);
+        ImGui::SameLine(150);
+        const char *name = SDL_GetScancodeName(binding.scan);
+        if (ImGui::Button(app.capture_arcade_key_binding == i ? "press a key..." : (name && name[0] ? name : "Unbound"), ImVec2(160, 0)))
+            app.capture_arcade_key_binding = i;
+        ImGui::PopID();
+    }
+}
+
 static void draw_keyboard_controls(AppState &app)
 {
+    if (arcade_machine_active())
+    {
+        draw_arcade_keyboard_controls(app);
+        ImGui::Separator();
+    }
+
     ImGui::TextUnformatted("Keyboard remapping");
     for (int i = 0; i < ACT_COUNT; i++)
     {
+        Action action = static_cast<Action>(i);
+        if (arcade_machine_active() && action_is_machine_specific(action)) continue;
         ImGui::PushID(i);
         ImGui::Text("%-20s", g_bindings[i].name);
         ImGui::SameLine(220);
@@ -1257,33 +1357,56 @@ static void draw_keyboard_controls(AppState &app)
             app.capture_binding = i;
         ImGui::PopID();
     }
-    ImGui::Separator();
-    ImGui::TextUnformatted("ColecoVision keypad remapping");
-    ImGui::TextUnformatted("Each keypad entry has a primary key and an alternate key. Defaults are number-row plus PC numpad.");
-    for (int i = 0; i < static_cast<int>(g_coleco_key_bindings.size()); i++)
+    if (sms.console == CONSOLE_COLECO)
     {
-        ColecoKeyBinding &binding = g_coleco_key_bindings[i];
-        ImGui::PushID(2000 + i);
-        ImGui::Text("%-12s", binding.name);
-        ImGui::SameLine(150);
-        const char *primary = SDL_GetScancodeName(binding.scan);
-        if (ImGui::Button(app.capture_coleco_key_binding == i ? "press primary..." : (primary && primary[0] ? primary : "Unbound"), ImVec2(150, 0)))
-            app.capture_coleco_key_binding = i;
-        ImGui::SameLine();
-        const char *alt = SDL_GetScancodeName(binding.alt_scan);
-        if (ImGui::Button(app.capture_coleco_alt_key_binding == i ? "press alternate..." : (alt && alt[0] ? alt : "Unbound"), ImVec2(150, 0)))
-            app.capture_coleco_alt_key_binding = i;
-        ImGui::PopID();
+        ImGui::Separator();
+        ImGui::TextUnformatted("ColecoVision keypad remapping");
+        ImGui::TextUnformatted("Each keypad entry has a primary key and an alternate key. Defaults are number-row plus PC numpad.");
+        for (int i = 0; i < static_cast<int>(g_coleco_key_bindings.size()); i++)
+        {
+            ColecoKeyBinding &binding = g_coleco_key_bindings[i];
+            ImGui::PushID(2000 + i);
+            ImGui::Text("%-12s", binding.name);
+            ImGui::SameLine(150);
+            const char *primary = SDL_GetScancodeName(binding.scan);
+            if (ImGui::Button(app.capture_coleco_key_binding == i ? "press primary..." : (primary && primary[0] ? primary : "Unbound"), ImVec2(150, 0)))
+                app.capture_coleco_key_binding = i;
+            ImGui::SameLine();
+            const char *alt = SDL_GetScancodeName(binding.alt_scan);
+            if (ImGui::Button(app.capture_coleco_alt_key_binding == i ? "press alternate..." : (alt && alt[0] ? alt : "Unbound"), ImVec2(150, 0)))
+                app.capture_coleco_alt_key_binding = i;
+            ImGui::PopID();
+        }
     }
-    ImGui::TextWrapped("M5 keyboard is direct: PC number keys 1/2 drive the M5 rows used by Pooyan. Text events are also accepted so non-QWERTY layouts can enter logical characters.");
+    if (sms.console == CONSOLE_SORDM5)
+        ImGui::TextWrapped("M5 keyboard is direct: PC number keys 1/2 drive the M5 rows used by Pooyan. Text events are also accepted so non-QWERTY layouts can enter logical characters.");
 }
 
 static void draw_controller_controls(AppState &app)
 {
     ImGui::TextUnformatted("Game controller remapping");
     ImGui::Text("Gamepad: %s", app.gamepad ? "connected" : "not connected");
+
+    if (arcade_machine_active())
+    {
+        ImGui::TextUnformatted("Sega arcade inputs");
+        for (int i = 0; i < static_cast<int>(g_arcade_bindings.size()); i++)
+        {
+            ArcadeBinding &binding = g_arcade_bindings[i];
+            ImGui::PushID(6000 + i);
+            ImGui::Text("%-12s", binding.name);
+            ImGui::SameLine(220);
+            if (ImGui::Button(app.capture_arcade_gamepad_binding == i ? "press a button..." : gamepad_button_name(binding.button), ImVec2(160, 0)))
+                app.capture_arcade_gamepad_binding = i;
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+    }
+
     for (int i = 0; i < ACT_COUNT; i++)
     {
+        Action action = static_cast<Action>(i);
+        if (arcade_machine_active() && action_is_machine_specific(action)) continue;
         ImGui::PushID(1000 + i);
         ImGui::Text("%-20s", g_bindings[i].name);
         ImGui::SameLine(220);
@@ -1292,18 +1415,21 @@ static void draw_controller_controls(AppState &app)
         ImGui::PopID();
     }
 
-    ImGui::Separator();
-    ImGui::TextUnformatted("ColecoVision keypad");
-    ImGui::TextUnformatted("Optional controller mappings for keypad digits, star, and pound.");
-    for (int i = 0; i < static_cast<int>(g_coleco_key_bindings.size()); i++)
+    if (sms.console == CONSOLE_COLECO)
     {
-        ColecoKeyBinding &binding = g_coleco_key_bindings[i];
-        ImGui::PushID(3000 + i);
-        ImGui::Text("%-12s", binding.name);
-        ImGui::SameLine(220);
-        if (ImGui::Button(app.capture_coleco_gamepad_binding == i ? "press a button..." : gamepad_button_name(binding.button), ImVec2(160, 0)))
-            app.capture_coleco_gamepad_binding = i;
-        ImGui::PopID();
+        ImGui::Separator();
+        ImGui::TextUnformatted("ColecoVision keypad");
+        ImGui::TextUnformatted("Optional controller mappings for keypad digits, star, and pound.");
+        for (int i = 0; i < static_cast<int>(g_coleco_key_bindings.size()); i++)
+        {
+            ColecoKeyBinding &binding = g_coleco_key_bindings[i];
+            ImGui::PushID(3000 + i);
+            ImGui::Text("%-12s", binding.name);
+            ImGui::SameLine(220);
+            if (ImGui::Button(app.capture_coleco_gamepad_binding == i ? "press a button..." : gamepad_button_name(binding.button), ImVec2(160, 0)))
+                app.capture_coleco_gamepad_binding = i;
+            ImGui::PopID();
+        }
     }
 
     ImGui::Separator();
@@ -1399,6 +1525,17 @@ static void draw_virtual_keyboard(AppState &app)
     ImGui::End();
 }
 
+
+static void draw_menu_hint(AppState &app)
+{
+    if (!app.rom_loaded || app.ui.show_menu || app.menu_hint_frames <= 0) return;
+    ImDrawList *draw = ImGui::GetForegroundDrawList();
+    const ImVec2 pos(10.0f, 8.0f);
+    const char *text = "Press Escape for menu";
+    draw->AddText(ImVec2(pos.x + 1.0f, pos.y + 1.0f), IM_COL32(0, 0, 0, 220), text);
+    draw->AddText(pos, IM_COL32(255, 255, 255, 235), text);
+}
+
 static void draw_menu(AppState &app)
 {
     if (!app.ui.show_menu) return;
@@ -1435,7 +1572,23 @@ static void draw_menu(AppState &app)
             if (ImGui::Button(app.paused ? "Resume" : "Pause")) app.paused = !app.paused;
             ImGui::SameLine();
             if (ImGui::Button("Reset") && app.rom_loaded) system_reset();
-            ImGui::Checkbox("Sord M5 virtual keyboard", &app.ui.show_keyboard);
+            if (arcade_machine_active())
+            {
+                ImGui::Separator();
+                ImGui::TextUnformatted("Arcade inputs");
+                for (int i = 0; i < static_cast<int>(g_arcade_bindings.size()); i++)
+                {
+                    const ArcadeBinding &binding = g_arcade_bindings[i];
+                    ImGui::PushID(7000 + i);
+                    if (ImGui::Button(binding.name) || ImGui::IsItemActive())
+                        app.arcade_ui_mask_next |= binding.mask;
+                    if ((i % 3) != 2) ImGui::SameLine();
+                    ImGui::PopID();
+                }
+                ImGui::Text("Current arcade mask: 0x%02X", input.arcade);
+            }
+            if (sms.console == CONSOLE_SORDM5)
+                ImGui::Checkbox("Sord M5 virtual keyboard", &app.ui.show_keyboard);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -1490,6 +1643,12 @@ static void handle_event(AppState &app, const SDL_Event &e)
             {
                 g_coleco_key_bindings[app.capture_coleco_alt_key_binding].alt_scan = e.key.scancode;
                 app.capture_coleco_alt_key_binding = -1;
+                break;
+            }
+            if (app.capture_arcade_key_binding >= 0 && down)
+            {
+                g_arcade_bindings[app.capture_arcade_key_binding].scan = e.key.scancode;
+                app.capture_arcade_key_binding = -1;
                 break;
             }
             for (int i = 0; i < ACT_COUNT; i++)
@@ -1644,6 +1803,8 @@ int main(int argc, char **argv)
     {
         app.rewind_ui_hold = app.rewind_ui_hold_next;
         app.rewind_ui_hold_next = false;
+        app.arcade_ui_mask = app.arcade_ui_mask_next;
+        app.arcade_ui_mask_next = 0;
 
         SDL_Event e;
         while (SDL_PollEvent(&e)) handle_event(app, e);
@@ -1651,6 +1812,7 @@ int main(int argc, char **argv)
         update_coleco_keypad_from_inputs(app);
         update_virtual_keyboard_gamepad(app);
         update_lightgun_mouse(app);
+        update_arcade_state_from_inputs(app);
 
         if (app.rom_loaded && !app.paused)
         {
@@ -1680,6 +1842,8 @@ int main(int argc, char **argv)
         ImGui::NewFrame();
         if (app.rom_loaded) render_core(app);
         else { SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 255); SDL_RenderClear(app.renderer); }
+        draw_menu_hint(app);
+        if (app.menu_hint_frames > 0) app.menu_hint_frames--;
         draw_menu(app);
         draw_virtual_keyboard(app);
         ImGui::Render();

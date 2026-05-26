@@ -38,6 +38,31 @@ input_t input;
 
 extern int32_t z80_cycle_count;
 
+int32_t system_cycles_per_line(void)
+{
+	if (sms.console == CONSOLE_SYSTEME) return SYSTEME_CYCLES_PER_LINE;
+	if (sms.console == CONSOLE_SYSTEM1) return SYSTEM1_CYCLES_PER_LINE;
+	if (sms.console == CONSOLE_SNKPSYCHOS) return SNK_PSYCHOS_CYCLES_PER_LINE;
+	return CYCLES_PER_LINE;
+}
+
+int32_t system_hcounter_index(void)
+{
+	int32_t cycles_per_line = system_cycles_per_line();
+	int32_t dot = z80_get_elapsed_cycles() % cycles_per_line;
+
+	if (sms.console == CONSOLE_SYSTEME)
+		dot = (dot * CYCLES_PER_LINE) / SYSTEME_CYCLES_PER_LINE;
+	else if (sms.console == CONSOLE_SYSTEM1)
+		dot = (dot * CYCLES_PER_LINE) / SYSTEM1_CYCLES_PER_LINE;
+	else if (sms.console == CONSOLE_SNKPSYCHOS)
+		dot = (dot * CYCLES_PER_LINE) / SNK_PSYCHOS_CYCLES_PER_LINE;
+
+	if (dot < 0) dot = 0;
+	if (dot >= CYCLES_PER_LINE) dot = CYCLES_PER_LINE - 1;
+	return dot;
+}
+
 static void lightgun_update_dpad_cursor(void)
 {
 	int32_t port;
@@ -70,9 +95,23 @@ static void lightgun_update_dpad_cursor(void)
 void system_frame(uint32_t skip_render)
 {
 	int32_t iline = 0, line_z80 = 0;
+	const int32_t cycles_per_line = system_cycles_per_line();
 
-	/* Debounce pause key */
-	if(input.system & INPUT_PAUSE)
+	if (sms.console == CONSOLE_SYSTEM1)
+	{
+		system1_frame(skip_render);
+		return;
+	}
+
+	if (sms.console == CONSOLE_SNKPSYCHOS)
+	{
+		snk_psychos_frame(skip_render);
+		return;
+	}
+
+	/* Debounce pause key.  Arcade drivers use dedicated coin/service/start bits;
+	 * do not assert the SMS pause/NMI path while an arcade game is running. */
+	if((sms.console != CONSOLE_SYSTEME) && (sms.console != CONSOLE_SYSTEM1) && (sms.console != CONSOLE_SNKPSYCHOS) && (input.system & INPUT_PAUSE))
 	{
 		if(!sms.paused)
 		{
@@ -102,10 +141,12 @@ void system_frame(uint32_t skip_render)
 
 	/* Reset collision flag infos */
 	vdp.spr_col = 0xff00;
+	if (sms.console == CONSOLE_SYSTEME) systeme_vdp_frame_start();
 
 	/* Line processing */
 	for(vdp.line = 0; vdp.line < vdp.lpf; vdp.line++)
 	{
+		if (sms.console == CONSOLE_SYSTEME) systeme_vdp_set_line(vdp.line);
 		iline = vdp.height;
 
 		/* VDP line rendering */
@@ -125,7 +166,18 @@ void system_frame(uint32_t skip_render)
 						/* IRQ line is latched between instructions, on instruction last cycle          */
 						/* This means that if Z80 cycle count is exactly a multiple of CYCLES_PER_LINE, */
 						/* interrupt should be triggered AFTER the next instruction.                    */
-						if (!(z80_get_elapsed_cycles()%CYCLES_PER_LINE))
+						if (!(z80_get_elapsed_cycles()%cycles_per_line))
+							z80_execute(1);
+						z80_set_irq_line(0, ASSERT_LINE);
+					}
+				}
+				if(sms.console == CONSOLE_SYSTEME && --vdp2.left < 0)
+				{
+					vdp2.left = vdp2.reg[0x0A];
+					vdp2.hint_pending = 1;
+					if(vdp2.reg[0x00] & 0x10)
+					{
+						if (!(z80_get_elapsed_cycles()%cycles_per_line))
 							z80_execute(1);
 						z80_set_irq_line(0, ASSERT_LINE);
 					}
@@ -134,11 +186,11 @@ void system_frame(uint32_t skip_render)
 		}
 
 		/* Run Z80 CPU */
-		line_z80 += CYCLES_PER_LINE;
+		line_z80 += cycles_per_line;
 		z80_execute((line_z80 - z80_cycle_count));
 #ifdef SORDM5_EMU
 		if (sms.console == CONSOLE_SORDM5)
-			sordm5_ctc_tick(CYCLES_PER_LINE);
+			sordm5_ctc_tick(cycles_per_line);
 #endif
 		
 		/* Vertical Interrupt */
@@ -146,6 +198,11 @@ void system_frame(uint32_t skip_render)
 		{
 			vdp.status |= 0x80;
 			vdp.vint_pending = 1;
+			if (sms.console == CONSOLE_SYSTEME)
+			{
+				vdp2.status |= 0x80;
+				vdp2.vint_pending = 1;
+			}
 			if(vdp.reg[0x01] & 0x20)
 			{
 				#ifdef SORDM5_EMU
@@ -155,6 +212,8 @@ void system_frame(uint32_t skip_render)
 				#endif
 					z80_set_irq_line(vdp.irq, ASSERT_LINE);
 			}
+			if((sms.console == CONSOLE_SYSTEME) && (vdp2.reg[0x01] & 0x20))
+				z80_set_irq_line(vdp.irq, ASSERT_LINE);
 		}
 
 		/* Run sound chips */
@@ -190,6 +249,8 @@ void system_reset(void)
 	pio_reset();
 	vdp_reset();
 	render_reset();
+	if (sms.console == CONSOLE_SYSTEM1) system1_reset();
+	if (sms.console == CONSOLE_SNKPSYCHOS) snk_psychos_reset();
 	SMSPLUS_sound_reset();
 	system_manage_sram(cart.sram, SLOT_CART, SRAM_LOAD);
 	if (cart.mapper == MAPPER_93C46) eeprom93c46_load_from_sram(cart.sram);

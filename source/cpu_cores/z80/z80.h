@@ -74,6 +74,17 @@ void z80_set_irq_line(int32_t inputnum, int32_t state);
 void z80_reset_cycle_count(void);
 int32_t z80_get_elapsed_cycles(void);
 
+/* Optional multi-instance activation used by multi-Z80 arcade drivers.
+ * The default SMS/GG path continues to use the exported global Z80 context
+ * and cpu_readmap[] arrays.  These functions only redirect the interpreter's
+ * internal hot paths; they do not share mutable CPU state. */
+void z80_select_context(Z80_Regs *regs, int32_t *cycle_counter);
+void z80_select_default_context(void);
+Z80_Regs *z80_get_context(void);
+void z80_select_opcode_map(uint8_t **readmap);
+void z80_select_memory_maps(uint8_t **readmap, uint8_t **writemap);
+void z80_select_default_opcode_map(void);
+
 extern void (*cpu_writemem16)(uint16_t address, uint8_t data);
 extern void (*cpu_writeport16)(uint16_t port, uint8_t data);
 extern uint8_t (*cpu_readport16)(uint16_t port);

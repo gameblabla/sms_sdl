@@ -11,6 +11,7 @@
 #include "shared.h"
 #include "scaler.h"
 #include "smsplus.h"
+#include "sdl12_common.h"
 #include "font_drawing.h"
 #include "sound_output.h"
 
@@ -106,144 +107,22 @@ static void video_update(void)
 
 void smsp_state(uint8_t slot_number, uint8_t mode)
 {
-	// Save and Load States
-	char stpath[PATH_MAX];
-	snprintf(stpath, sizeof(stpath), "%s%s.st%d", gdata.stdir, gdata.gamename, slot_number);
-	FILE *fd;
-	
-	switch(mode) {
-		case 0:
-			fd = fopen(stpath, "wb");
-			if (fd) {
-				system_save_state(fd);
-				fclose(fd);
-			}
-			break;
-		
-		case 1:
-			fd = fopen(stpath, "rb");
-			if (fd) {
-				system_load_state(fd);
-				fclose(fd);
-			}
-			break;
-	}
+	smsplus_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
 }
 
-void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode) 
+void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
 {
-	// Set up save file name
-	FILE *fd;
-	switch(mode) 
-	{
-		case SRAM_SAVE:
-			if(sms.save) 
-			{
-				fd = fopen(gdata.sramfile, "wb");
-				if (fd) 
-				{
-					fwrite(sram, 0x8000, 1, fd);
-					fclose(fd);
-				}
-			}
-			break;
-		
-		case SRAM_LOAD:
-			fd = fopen(gdata.sramfile, "rb");
-			if (fd) 
-			{
-				sms.save = 1;
-				fread(sram, 0x8000, 1, fd);
-				fclose(fd);
-			}
-			else
-				memset(sram, 0x00, 0x8000);
-			break;
-	}
+	(void)slot_number;
+	smsplus_sdl12_sram_file(gdata.sramfile, sram, mode);
 }
 
 static uint32_t sdl_controls_update_input(SDLKey k, int32_t p)
 {
-	/* We can't use switch... case because we are not using constants */
-	if (sms.console == CONSOLE_COLECO)
-    {
-		coleco.keypad[0] = 0xff;
-		coleco.keypad[1] = 0xff;
-		
-		if (k == option.config_buttons[CONFIG_BUTTON_ONE]) coleco.keypad[0] = 1;
-		else if (k == option.config_buttons[CONFIG_BUTTON_TWO]) coleco.keypad[0] = 2;
-		else if (k == option.config_buttons[CONFIG_BUTTON_THREE]) coleco.keypad[0] = 3;
-		else if (k == option.config_buttons[CONFIG_BUTTON_FOUR]) coleco.keypad[0] = 4;
-		else if (k == option.config_buttons[CONFIG_BUTTON_FIVE]) coleco.keypad[0] = 5;
-		else if (k == option.config_buttons[CONFIG_BUTTON_SIX]) coleco.keypad[0] = 6;
-		else if (k == option.config_buttons[CONFIG_BUTTON_SEVEN]) coleco.keypad[0] = 7;
-		else if (k == option.config_buttons[CONFIG_BUTTON_EIGHT]) coleco.keypad[0] = 8;
-		else if (k == option.config_buttons[CONFIG_BUTTON_NINE]) coleco.keypad[0] = 9;
-		else if (k == option.config_buttons[CONFIG_BUTTON_DOLLARS]) coleco.keypad[0] = 10;
-		else if (k == option.config_buttons[CONFIG_BUTTON_ASTERISK]) coleco.keypad[0] = 11;
-	}
-	
-	if (k == option.config_buttons[CONFIG_BUTTON_UP])
-	{
-		if (p)
-			input.pad[0] |= INPUT_UP;
-		else
-			input.pad[0] &= ~INPUT_UP;
-	}
-	else if (k == option.config_buttons[CONFIG_BUTTON_LEFT])
-	{
-		if (p)
-			input.pad[0] |= INPUT_LEFT;
-		else
-			input.pad[0] &= ~INPUT_LEFT;
-	}
-	else if (k == option.config_buttons[CONFIG_BUTTON_RIGHT])
-	{
-		if (p)
-			input.pad[0] |= INPUT_RIGHT;
-		else
-			input.pad[0] &= ~INPUT_RIGHT;
-	}
-	else if (k == option.config_buttons[CONFIG_BUTTON_DOWN])
-	{
-		if (p)
-			input.pad[0] |= INPUT_DOWN;
-		else
-			input.pad[0] &= ~INPUT_DOWN;
-	}
-	else if (k == option.config_buttons[CONFIG_BUTTON_BUTTON1])
-	{
-		if (p)
-			input.pad[0] |= INPUT_BUTTON2;
-		else
-			input.pad[0] &= ~INPUT_BUTTON2;
-	}
-	else if (k == option.config_buttons[CONFIG_BUTTON_BUTTON2])
-	{
-		if (p)
-			input.pad[0] |= INPUT_BUTTON1;
-		else
-			input.pad[0] &= ~INPUT_BUTTON1;
-	}
-	else if (k == option.config_buttons[CONFIG_BUTTON_START])
-	{
-		if (p)
-			input.system |= (sms.console == CONSOLE_GG) ? INPUT_START : INPUT_PAUSE;
-		else
-			input.system &= (sms.console == CONSOLE_GG) ? ~INPUT_START : ~INPUT_PAUSE;
-	}
-	else if (k == SDLK_RCTRL || k == SDLK_ESCAPE)
-	{
-		if (p)
-			selectpressed = 1;
-		else
-			selectpressed = 0;
-	}
-	
-	if (sms.console == CONSOLE_COLECO) input.system = 0;
-	
-	return 1;
+	smsplus_sdl12_keymap_t map;
+	smsplus_sdl12_keymap_from_config(&map, option.config_buttons);
+	return smsplus_sdl12_update_key(k, p, &map, &selectpressed);
 }
+
 
 
 static void bios_init()
@@ -977,7 +856,7 @@ int main (int argc, char *argv[])
 	
 	// Set parameters for internal bitmap
 	bitmap.width = VIDEO_WIDTH_SMS;
-	bitmap.height = VIDEO_HEIGHT_SMS;
+	bitmap.height = sms_bitmap->h;
 	bitmap.depth = 16;
 	bitmap.data = (uint8_t *)sms_bitmap->pixels;
 	bitmap.pitch = sms_bitmap->pitch;
@@ -998,6 +877,8 @@ int main (int argc, char *argv[])
 	// Loop until the user closes the window
 	while (!quit) 
 	{
+		smsplus_sdl12_frame_update();
+
 		// Execute frame(s)
 		system_frame(0);
 		

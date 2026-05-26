@@ -7,9 +7,6 @@
 #include "shared.h"
 #include "headless_platform.h"
 
-#if !defined(MAME_PSG) && !defined(MAXIM_PSG)
-extern sn76489_t psg_sn;
-#endif
 
 typedef struct playback_event
 {
@@ -153,8 +150,16 @@ static void yuv_from_rgb(uint8_t r, uint8_t g, uint8_t b, uint8_t *y, uint8_t *u
 static int y4m_open(smsplus_headless_platform_t *p)
 {
     if (!p->opt.video_y4m_path) return 1;
-    p->video_w = (sms.console == CONSOLE_GG && !option.extra_gg) ? 160u : 256u;
-    p->video_h = (sms.console == CONSOLE_GG && !option.extra_gg) ? 144u : 240u;
+    if (sms.console == CONSOLE_SNKPSYCHOS)
+    {
+        p->video_w = SNK_PSYCHOS_VISIBLE_WIDTH;
+        p->video_h = SNK_PSYCHOS_VISIBLE_HEIGHT;
+    }
+    else
+    {
+        p->video_w = (sms.console == CONSOLE_GG && !option.extra_gg) ? 160u : 256u;
+        p->video_h = (sms.console == CONSOLE_GG && !option.extra_gg) ? 144u : 240u;
+    }
     p->video_y4m = fopen(p->opt.video_y4m_path, "wb");
     if (!p->video_y4m) return 0;
     if (sms.display == DISPLAY_PAL)
@@ -230,13 +235,13 @@ static int playback_load(smsplus_headless_platform_t *p)
     size_t cap = 0;
     while (fgets(line, sizeof(line), fp))
     {
-        char *tok[16];
+        char *tok[17];
         size_t ntok = 0;
         char *save = NULL;
         char *s = strtok_r(line, " \t\r\n,", &save);
         if (!s || s[0] == '#') continue;
         if (strcmp(s, "frame") == 0) continue;
-        while (s && ntok < 16)
+        while (s && ntok < 17)
         {
             tok[ntok++] = s;
             s = strtok_r(NULL, " \t\r\n,", &save);
@@ -260,6 +265,7 @@ static int playback_load(smsplus_headless_platform_t *p)
         uint64_t frame = 0, pad0 = 0, pad1 = 0, system = 0;
         uint64_t m5row[SORDM5_KEY_ROWS] = {0, 0, 0, 0, 0, 0, 0};
         uint64_t m5reset = 0;
+        uint64_t arcade = 0;
         int32_t analog[4] = {0, 0, 0, 0};
         if (!parse_u64(tok[0], &frame) || !parse_u64(tok[1], &pad0) ||
             !parse_u64(tok[2], &pad1) || !parse_u64(tok[3], &system))
@@ -269,10 +275,12 @@ static int playback_load(smsplus_headless_platform_t *p)
         for (size_t i = 8; i < ntok && i < 15; i++)
             parse_u64(tok[i], &m5row[i - 8]);
         if (ntok > 15) parse_u64(tok[15], &m5reset);
+        if (ntok > 16) parse_u64(tok[16], &arcade);
         ev->frame = frame;
         ev->input.pad[0] = (uint8_t)pad0;
         ev->input.pad[1] = (uint8_t)pad1;
         ev->input.system = (uint8_t)system;
+        ev->input.arcade = (uint8_t)arcade;
         ev->input.analog[0][0] = analog[0];
         ev->input.analog[0][1] = analog[1];
         ev->input.analog[1][0] = analog[2];
@@ -305,17 +313,18 @@ static int dump_state(const char *prefix)
     if (!write_file_bytes(path, vdp.cram, sizeof(vdp.cram))) return 0;
     snprintf(path, sizeof(path), "%s_vdp_regs.bin", prefix);
     if (!write_file_bytes(path, vdp.reg, sizeof(vdp.reg))) return 0;
+    if (sms.console == CONSOLE_SYSTEME || sms.console == CONSOLE_SYSTEM1 || sms.console == CONSOLE_SNKPSYCHOS)
+    {
+        snprintf(path, sizeof(path), "%s_vdp2_vram.bin", prefix);
+        if (!write_file_bytes(path, vdp2.vram, sizeof(vdp2.vram))) return 0;
+        snprintf(path, sizeof(path), "%s_vdp2_cram.bin", prefix);
+        if (!write_file_bytes(path, vdp2.cram, sizeof(vdp2.cram))) return 0;
+        snprintf(path, sizeof(path), "%s_vdp2_regs.bin", prefix);
+        if (!write_file_bytes(path, vdp2.reg, sizeof(vdp2.reg))) return 0;
+    }
 
-#if defined(MAME_PSG)
-    snprintf(path, sizeof(path), "%s_psg_context.bin", prefix);
+snprintf(path, sizeof(path), "%s_psg_context.bin", prefix);
     if (!write_file_bytes(path, &PSG, sizeof(PSG))) return 0;
-#elif defined(MAXIM_PSG)
-    snprintf(path, sizeof(path), "%s_psg_context.bin", prefix);
-    if (!write_file_bytes(path, SN76489_GetContextPtr(0), SN76489_GetContextSize())) return 0;
-#else
-    snprintf(path, sizeof(path), "%s_psg_context.bin", prefix);
-    if (!write_file_bytes(path, &psg_sn, sizeof(psg_sn))) return 0;
-#endif
 
     uint32_t fm_size = FM_GetContextSize();
     if (fm_size)
@@ -362,7 +371,7 @@ int smsplus_headless_platform_create(smsplus_headless_platform_t **out,
     {
         p->input_record = fopen(p->opt.input_record_path, "wb");
         if (!p->input_record) goto fail;
-        fprintf(p->input_record, "frame pad0 pad1 system analog00 analog01 analog10 analog11 m5y0 m5y1 m5y2 m5y3 m5y4 m5y5 m5y6 m5reset\n");
+        fprintf(p->input_record, "frame pad0 pad1 system analog00 analog01 analog10 analog11 m5y0 m5y1 m5y2 m5y3 m5y4 m5y5 m5y6 m5reset arcade\n");
     }
     if (!playback_load(p)) goto fail;
     if (!wav_open(p)) goto fail;
@@ -412,11 +421,11 @@ int smsplus_headless_platform_end_frame(smsplus_headless_platform_t *p, uint64_t
 
     if (p->input_record)
     {
-        fprintf(p->input_record, "%llu 0x%02X 0x%02X 0x%02X %d %d %d %d 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n",
+        fprintf(p->input_record, "%llu 0x%02X 0x%02X 0x%02X %d %d %d %d 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n",
                 (unsigned long long)frame, input.pad[0], input.pad[1], input.system,
                 input.analog[0][0], input.analog[0][1], input.analog[1][0], input.analog[1][1],
                 input.m5_key[0], input.m5_key[1], input.m5_key[2], input.m5_key[3],
-                input.m5_key[4], input.m5_key[5], input.m5_key[6], input.m5_reset);
+                input.m5_key[4], input.m5_key[5], input.m5_key[6], input.m5_reset, input.arcade);
     }
 
     if (p->audio_wav && snd.output && snd.sample_count > 0)

@@ -25,9 +25,12 @@
 #ifndef MEMZ80_H_
 #define MEMZ80_H_
 
+#include "build_features.h"
+
 /* Global data */
 extern uint8_t data_bus_pullup;
 extern uint8_t data_bus_pulldown;
+extern uint8_t z80_data_operand_fetch;
 
 /* Function prototypes */
 extern uint8_t z80_read_unmapped(void);
@@ -37,22 +40,22 @@ extern void ggms_port_w(uint16_t port, uint8_t data);
 extern uint8_t ggms_port_r(uint16_t port);
 extern void sms_port_w(uint16_t port, uint8_t data);
 extern uint8_t sms_port_r(uint16_t port);
+extern void systeme_port_w(uint16_t port, uint8_t data);
+extern uint8_t systeme_port_r(uint16_t port);
+extern void system1_port_w(uint16_t port, uint8_t data);
+extern uint8_t system1_port_r(uint16_t port);
 extern void smsj_port_w(uint16_t port, uint8_t data);
 extern uint8_t smsj_port_r(uint16_t port);
 extern void md_port_w(uint16_t port, uint8_t data);
 extern uint8_t md_port_r(uint16_t port);
 extern void tms_port_w(uint16_t port, uint8_t data);
 extern uint8_t tms_port_r(uint16_t port);
-extern void coleco_port_w(uint16_t port, uint8_t data);
-extern uint8_t coleco_port_r(uint16_t port);
+#if SMSPLUS_ENABLE_COLECO
+#include "platform/coleco/coleco.h"
+#endif
 
-#ifdef SORDM5_EMU
-extern void sordm5_port_w(uint16_t port, uint8_t data);
-extern uint8_t sordm5_port_r(uint16_t port);
-extern void sordm5_ctc_reset(void);
-extern void sordm5_ctc_vdp_interrupt(void);
-extern void sordm5_ctc_tick(int32_t cycles);
-extern int32_t sordm5_ctc_irq_callback(void);
+#if SMSPLUS_ENABLE_SORDM5
+#include "platform/sord_m5/sord_m5.h"
 #endif
 
 #endif /* _MEMZ80_H_ */

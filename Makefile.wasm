@@ -1,0 +1,52 @@
+# Raw clang/WebAssembly browser build.  This intentionally does not use Emscripten.
+# Use a WASI-capable clang/sysroot (for example wasi-sdk) and serve web/wasm/.
+PRGNAME      = web/wasm/smsplusgx.wasm
+ifeq ($(origin CC),default)
+CC           := clang
+endif
+AR           ?= llvm-ar
+Z80_CORE     ?= z80
+PSG_ENGINE ?= mame_sn76489
+ifneq ($(origin SOUND_ENGINE), undefined)
+PSG_ENGINE := $(SOUND_ENGINE)
+endif
+RENDER_BPP   := 32
+STATIC_MEMORY ?= 1
+STATIC_MEMORY_BYTES ?= 16777216
+ENABLE_ARCADE ?= 1
+ENABLE_COLECO ?= 1
+ENABLE_SORDM5 ?= 1
+FEATURE_DEFS := -DSMSPLUS_ENABLE_ARCADE=$(ENABLE_ARCADE) -DSMSPLUS_ENABLE_COLECO=$(ENABLE_COLECO) -DSMSPLUS_ENABLE_SORDM5=$(ENABLE_SORDM5)
+
+SRCDIR = ./source ./source/other/eeprom/93c46 ./source/other/decode ./source/video/sms_vdp ./source/video/tms9918 ./source/sound/mixer ./source/sound/opll ./source/sound/opl1 ./source/cpu_cores/$(Z80_CORE) ./source/sound/psg/mame_sn76489 ./source/ports/wasm ./source/unzip
+
+ifeq ($(ENABLE_COLECO),1)
+SRCDIR += ./source/platform/coleco
+endif
+ifeq ($(ENABLE_SORDM5),1)
+SRCDIR += ./source/platform/sord_m5
+endif
+ifeq ($(ENABLE_ARCADE),1)
+SRCDIR += ./source/video/sega_system1 ./source/video/snk_ikari_psychos
+else
+SRCDIR += ./source/platform/arcade_disabled
+endif
+VPATH        = $(SRCDIR)
+SRC_C        = $(foreach dir,$(SRCDIR),$(wildcard $(dir)/*.c))
+OBJS         = $(notdir $(patsubst %.c,%.wasm.o,$(SRC_C)))
+
+CFLAGS       = --target=wasm32-wasi -O2 -flto -std=gnu99 -Wall -Wextra
+CFLAGS       += $(FEATURE_DEFS) -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DMAME_PSG -DSMSPLUS_RENDER_32BPP -DSMSPLUS_WASM
+CFLAGS       += -DSMSPLUS_STATIC_MEMORY -DSMSPLUS_STATIC_MEMORY_BYTES=$(STATIC_MEMORY_BYTES)
+CFLAGS += -Isource -Isource/other/eeprom/93c46 -Isource/other/decode -Isource/platform/coleco -Isource/platform/sord_m5 -Isource/video/sms_vdp -Isource/video/tms9918 -Isource/video/sega_system1 -Isource/video/snk_ikari_psychos -Isource/sound/mixer -Isource/sound/opll -Isource/sound/opl1 -Isource/sound/psg/$(PSG_ENGINE) -Isource/cpu_cores/$(Z80_CORE) -Isource/sound/psg/mame_sn76489 -Isource/ports/wasm -Isource/unzip
+LDFLAGS      = --target=wasm32-wasi -Wl,--no-entry -Wl,--export-all -Wl,--allow-undefined -Wl,--lto-O2 -flto -lm
+
+$(PRGNAME): $(OBJS)
+	mkdir -p web/wasm
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+%.wasm.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+clean:
+	rm -f *.wasm.o $(PRGNAME)

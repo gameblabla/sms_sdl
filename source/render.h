@@ -63,5 +63,8 @@ extern void render_line(int32_t line);
 extern void render_bg_sms(int32_t line);
 extern void render_obj_sms(int32_t line);
 extern void palette_sync(int32_t index);
+extern void palette_sync_chip(int chip, int32_t index);
+extern void render_mark_bg_dirty_chip(int chip, uint16_t addr);
+extern void render_invalidate_bg_cache(void);
 
 #endif /* _RENDER_H_ */

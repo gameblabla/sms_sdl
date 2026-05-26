@@ -2,11 +2,10 @@
 #ifndef FMINTF_H_
 #define FMINTF_H_
 
-enum 
+enum
 {
     SND_NULL,
-    SND_EMU2413,        /* Mitsutaka Okazaki's YM2413 emulator, removed until i can switch to upstream due to unclear license */
-    SND_YM2413          /* Jarek Burczynski's YM2413 emulator */
+    SND_OPLL            /* Unified OPL backend: YM2413 OPLL mode */
 };
 
 typedef struct 

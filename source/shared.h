@@ -20,6 +20,7 @@
 #include <malloc.h>
 #include <math.h>
 #include <limits.h>
+#include "static_alloc.h"
 
 #ifndef NGC
 #ifndef PATH_MAX
@@ -31,19 +32,22 @@
 #endif
 #endif
 
+#include "build_features.h"
 #include "z80.h"
 #include "sms.h"
-#include "eeprom93c46.h"
+#include "other/eeprom/93c46/eeprom93c46.h"
 #include "pio.h"
 #include "memz80.h"
-#include "vdp.h"
+#include "video/sms_vdp/vdp.h"
 #include "render.h"
-#include "tms.h"
-#include "sn76489.h"
-#include "ym2413.h"
-#include "fmintf.h"
-#include "sound.h"
+#include "video/tms9918/tms.h"
+#include "sound/psg/mame_sn76489/sn76489.h"
+#include "sound/opl1/opl.h"
+#include "sound/opll/fmintf.h"
+#include "sound/mixer/sound.h"
 #include "system.h"
+#include "video/sega_system1/system1.h"
+#include "video/snk_ikari_psychos/snk_psychos.h"
 #include "loadrom.h"
 #include "config.h"
 #include "state.h"

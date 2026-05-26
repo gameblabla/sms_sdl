@@ -45,6 +45,14 @@
 #define INPUT_PAUSE         0x00000002  /* Master System only */
 #define INPUT_RESET         0x00000004  /* Master System only */
 
+/* These can be used for 'input.arcade' (active-high host state, active-low PCB inputs). */
+#define INPUT_ARCADE_COIN1   0x01
+#define INPUT_ARCADE_COIN2   0x02
+#define INPUT_ARCADE_TEST    0x04
+#define INPUT_ARCADE_SERVICE 0x08
+#define INPUT_ARCADE_START1  0x10
+#define INPUT_ARCADE_START2  0x20
+
 #define SORDM5_KEY_ROWS     7
 #define SORDM5_KEY_RESET    0x80
 
@@ -60,6 +68,7 @@ typedef struct
 	int32_t analog[2][2];
 	uint8_t pad[2];
 	uint8_t system;
+	uint8_t arcade;
 	/* Sord M5 keyboard matrix, active-high rows Y0-Y6, matching MAME's m5.cpp input ports. */
 	uint8_t m5_key[SORDM5_KEY_ROWS];
 	uint8_t m5_reset;
@@ -108,6 +117,8 @@ extern cart_t cart;       /* Game cartridge data */
 extern input_t input;     /* Controller input */
 
 /* Function prototypes */
+extern int32_t system_cycles_per_line(void);
+extern int32_t system_hcounter_index(void);
 extern void system_frame(uint32_t skip_render);
 extern void system_init(void);
 extern void system_shutdown(void);

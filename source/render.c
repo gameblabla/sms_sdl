@@ -37,12 +37,22 @@
 /*** Vertical Counter Tables ***/
 extern uint8_t *vc_table[2][3];
 
-static struct
+typedef struct
 {
   uint16_t yrange;
   uint16_t xpos;
   uint16_t attr;
-} object_info[64];
+} object_info_t;
+
+static object_info_t object_info[64];
+static object_info_t *systeme_object_info;
+static object_info_t *object_info_main_ptr = object_info;
+static object_info_t *active_object_info = object_info;
+#define object_info active_object_info
+
+static vdp_t *vdp_main_ptr = &vdp;
+static vdp_t *render_vdp = &vdp;
+#define vdp (*render_vdp)
 
 /* Background drawing function */
 void (*render_bg)(int32_t line) = NULL;
@@ -59,6 +69,18 @@ uint8_t gg_cram_expand_table[16];
 uint8_t bg_name_dirty[0x200];     /* 1= This pattern is dirty */
 uint16_t bg_name_list[0x200];     /* List of modified pattern indices */
 uint16_t bg_list_index;           /* # of modified patterns in list */
+static uint8_t *systeme_bg_name_dirty;
+static uint16_t *systeme_bg_name_list;
+static uint16_t systeme_bg_list_index;
+static uint8_t *bg_name_dirty_main_ptr = bg_name_dirty;
+static uint16_t *bg_name_list_main_ptr = bg_name_list;
+static uint16_t *bg_list_index_main_ptr = &bg_list_index;
+static uint8_t *active_bg_name_dirty = bg_name_dirty;
+static uint16_t *active_bg_name_list = bg_name_list;
+static uint16_t *active_bg_list_index = &bg_list_index;
+#define bg_name_dirty active_bg_name_dirty
+#define bg_name_list active_bg_name_list
+#define bg_list_index (*active_bg_list_index)
 
 /* Internal buffer for drawing non 8-bit displays */
 #ifndef _8BPP_COLOR
@@ -66,8 +88,10 @@ static uint8_t internal_buffer[0x200];
 /* Precalculated pixel table */
 #ifdef SMSPLUS_RENDER_32BPP
 static uint32_t pixel[PALETTE_SIZE];
+static uint32_t *systeme_pixel;
 #else
 static uint16_t pixel[PALETTE_SIZE];
+static uint16_t *systeme_pixel;
 #ifndef SMSPLUS_DISABLE_FAST_REMAP
 /*
  * Fast RGB565 remap table.  The renderer internally draws palette indices
@@ -82,11 +106,21 @@ static uint8_t remap16_pair_dirty = 1;
 #endif
 
 static uint8_t bg_pattern_cache[0x20000];/* Cached and flipped patterns */
+static uint8_t *systeme_bg_pattern_cache;
+static uint8_t *systeme_back_line;
+static uint8_t *systeme_front_line;
+static uint8_t *bg_pattern_cache_main_ptr = bg_pattern_cache;
+static uint8_t *active_bg_pattern_cache = bg_pattern_cache;
+#define bg_pattern_cache active_bg_pattern_cache
 
 /* Pixel look-up table */
 static uint8_t lut[0x10000];
 
 static uint8_t object_index_count;
+static uint8_t systeme_object_index_count;
+static uint8_t *object_index_count_main_ptr = &object_index_count;
+static uint8_t *active_object_index_count = &object_index_count;
+#define object_index_count (*active_object_index_count)
 
 /* Top Border area height */
 static uint8_t active_border[2][3] =
@@ -103,8 +137,8 @@ static uint16_t active_range[2] =
 };
 
 #define LCD_PERSISTENCE_MAX_PIXELS (256 * 313)
-static uint32_t lcd_persistence_buffer[LCD_PERSISTENCE_MAX_PIXELS];
-static uint8_t lcd_persistence_valid[LCD_PERSISTENCE_MAX_PIXELS];
+static uint32_t *lcd_persistence_buffer;
+static uint8_t *lcd_persistence_valid;
 
 #ifndef SMSPLUS_RENDER_32BPP
 static uint16_t lcd_blend_rgb565(uint16_t cur, uint16_t prev)
@@ -130,6 +164,31 @@ static uint32_t lcd_blend_xrgb8888(uint32_t cur, uint32_t prev)
 	return 0xFF000000u | (r << 16) | (g << 8) | b;
 }
 #endif
+
+static int lcd_persistence_alloc(void)
+{
+	if (!lcd_persistence_buffer)
+		lcd_persistence_buffer = (uint32_t *)calloc(LCD_PERSISTENCE_MAX_PIXELS, sizeof(uint32_t));
+	if (!lcd_persistence_valid)
+		lcd_persistence_valid = (uint8_t *)calloc(LCD_PERSISTENCE_MAX_PIXELS, sizeof(uint8_t));
+	return lcd_persistence_buffer && lcd_persistence_valid;
+}
+
+static void lcd_persistence_free(void)
+{
+	free(lcd_persistence_buffer);
+	lcd_persistence_buffer = NULL;
+	free(lcd_persistence_valid);
+	lcd_persistence_valid = NULL;
+}
+
+static void lcd_persistence_clear(void)
+{
+	if (lcd_persistence_buffer)
+		memset(lcd_persistence_buffer, 0, LCD_PERSISTENCE_MAX_PIXELS * sizeof(uint32_t));
+	if (lcd_persistence_valid)
+		memset(lcd_persistence_valid, 0, LCD_PERSISTENCE_MAX_PIXELS * sizeof(uint8_t));
+}
 
 /* CRAM palette in TMS compatibility mode */
 static const uint8_t tms_crom[] =
@@ -271,9 +330,133 @@ static __inline__ void write_dword(void *address, uint32_t data)
 
 /****************************************************************************/
 
+static int systeme_render_alloc(void)
+{
+	if (!systeme_object_info)
+		systeme_object_info = (object_info_t *)calloc(64, sizeof(object_info_t));
+	if (!systeme_bg_name_dirty)
+		systeme_bg_name_dirty = (uint8_t *)calloc(0x200, sizeof(uint8_t));
+	if (!systeme_bg_name_list)
+		systeme_bg_name_list = (uint16_t *)calloc(0x200, sizeof(uint16_t));
+	if (!systeme_bg_pattern_cache)
+		systeme_bg_pattern_cache = (uint8_t *)calloc(0x20000, sizeof(uint8_t));
+	if (!systeme_back_line)
+		systeme_back_line = (uint8_t *)calloc(0x200, sizeof(uint8_t));
+	if (!systeme_front_line)
+		systeme_front_line = (uint8_t *)calloc(0x200, sizeof(uint8_t));
+#ifndef _8BPP_COLOR
+	if (!systeme_pixel)
+		systeme_pixel = calloc(PALETTE_SIZE, sizeof(*systeme_pixel));
+#endif
+
+	return systeme_object_info && systeme_bg_name_dirty && systeme_bg_name_list &&
+		systeme_bg_pattern_cache && systeme_back_line && systeme_front_line
+#ifndef _8BPP_COLOR
+		&& systeme_pixel
+#endif
+		;
+}
+
+static void systeme_render_free(void)
+{
+	free(systeme_object_info);
+	systeme_object_info = NULL;
+	free(systeme_bg_name_dirty);
+	systeme_bg_name_dirty = NULL;
+	free(systeme_bg_name_list);
+	systeme_bg_name_list = NULL;
+	free(systeme_bg_pattern_cache);
+	systeme_bg_pattern_cache = NULL;
+	free(systeme_back_line);
+	systeme_back_line = NULL;
+	free(systeme_front_line);
+	systeme_front_line = NULL;
+#ifndef _8BPP_COLOR
+	free(systeme_pixel);
+	systeme_pixel = NULL;
+#endif
+	systeme_bg_list_index = 0;
+	systeme_object_index_count = 0;
+}
+
+static int systeme_render_ready(void)
+{
+	return systeme_object_info && systeme_bg_name_dirty && systeme_bg_name_list &&
+		systeme_bg_pattern_cache && systeme_back_line && systeme_front_line
+#ifndef _8BPP_COLOR
+		&& systeme_pixel
+#endif
+		;
+}
+
+static void render_select_context(int chip)
+{
+	if (chip && systeme_render_ready())
+	{
+		render_vdp = &vdp2;
+		active_object_info = systeme_object_info;
+		active_bg_name_dirty = systeme_bg_name_dirty;
+		active_bg_name_list = systeme_bg_name_list;
+		active_bg_list_index = &systeme_bg_list_index;
+		active_bg_pattern_cache = systeme_bg_pattern_cache;
+		active_object_index_count = &systeme_object_index_count;
+	}
+	else
+	{
+		render_vdp = vdp_main_ptr;
+		active_object_info = object_info_main_ptr;
+		active_bg_name_dirty = bg_name_dirty_main_ptr;
+		active_bg_name_list = bg_name_list_main_ptr;
+		active_bg_list_index = bg_list_index_main_ptr;
+		active_bg_pattern_cache = bg_pattern_cache_main_ptr;
+		active_object_index_count = object_index_count_main_ptr;
+	}
+}
+
+void render_mark_bg_dirty_chip(int chip, uint16_t addr)
+{
+	uint8_t *dirty = chip ? systeme_bg_name_dirty : bg_name_dirty_main_ptr;
+	uint16_t *list = chip ? systeme_bg_name_list : bg_name_list_main_ptr;
+	uint16_t *index = chip ? &systeme_bg_list_index : bg_list_index_main_ptr;
+	int32_t name = (addr >> 5) & 0x1FF;
+
+	if (chip && !systeme_render_ready())
+		return;
+
+	if (dirty[name] == 0 && *index < 0x200)
+	{
+		list[*index] = name;
+		(*index)++;
+	}
+	dirty[name] |= (1 << ((addr >> 2) & 7));
+}
+
+void render_invalidate_bg_cache(void)
+{
+	uint16_t i;
+
+	*bg_list_index_main_ptr = 0x200;
+	for (i = 0; i < 0x200; i++)
+	{
+		bg_name_list_main_ptr[i] = i;
+		bg_name_dirty_main_ptr[i] = 255;
+	}
+
+	if (sms.console == CONSOLE_SYSTEME && systeme_render_ready())
+	{
+		systeme_bg_list_index = 0x200;
+		for (i = 0; i < 0x200; i++)
+		{
+			systeme_bg_name_list[i] = i;
+			systeme_bg_name_dirty[i] = 255;
+		}
+	}
+}
 
 void render_shutdown(void)
 {
+	systeme_render_free();
+	lcd_persistence_free();
 }
 
 /* Initialize the rendering data */
@@ -375,20 +558,51 @@ void render_reset(void)
 
 	/* Clear display bitmap */
 	memset(bitmap.data, 0, bitmap.pitch * bitmap.height);
-	memset(lcd_persistence_buffer, 0, sizeof(lcd_persistence_buffer));
-	memset(lcd_persistence_valid, 0, sizeof(lcd_persistence_valid));
+	if ((sms.console == CONSOLE_GG) && option.lcd_persistence)
+	{
+		if (lcd_persistence_alloc())
+			lcd_persistence_clear();
+	}
+	else
+	{
+		lcd_persistence_free();
+	}
+
+	if (sms.console == CONSOLE_SYSTEME)
+	{
+		if (!systeme_render_alloc())
+		{
+			fprintf(stderr, "System E renderer allocation failed\n");
+			abort();
+		}
+	}
+	else
+	{
+		systeme_render_free();
+	}
+
+	render_select_context(0);
 
 	/* Clear palette */
 	for(i = 0; i < PALETTE_SIZE; i++)
 	{
-		palette_sync(i);
+		palette_sync_chip(0, i);
+		if (sms.console == CONSOLE_SYSTEME)
+			palette_sync_chip(1, i);
 	}
 
 	/* Invalidate pattern cache */
-	memset(bg_name_dirty, 0, sizeof(bg_name_dirty));
-	memset(bg_name_list, 0, sizeof(bg_name_list));
-	bg_list_index = 0;
-	memset(bg_pattern_cache, 0, sizeof(bg_pattern_cache));
+	memset(bg_name_dirty_main_ptr, 0, 0x200);
+	memset(bg_name_list_main_ptr, 0, 0x200 * sizeof(uint16_t));
+	*bg_list_index_main_ptr = 0;
+	memset(bg_pattern_cache_main_ptr, 0, 0x20000);
+	if (sms.console == CONSOLE_SYSTEME && systeme_render_ready())
+	{
+		memset(systeme_bg_name_dirty, 0, 0x200);
+		memset(systeme_bg_name_list, 0, 0x200 * sizeof(uint16_t));
+		systeme_bg_list_index = 0;
+		memset(systeme_bg_pattern_cache, 0, 0x20000);
+	}
 	
 #ifdef _8BPP_COLOR
     /* Mark all colors as dirty */
@@ -398,7 +612,7 @@ void render_reset(void)
 #endif
 
 	/* Pick default render routine */
-	if (vdp.reg[0] & 4)
+	if ((sms.console == CONSOLE_SYSTEME) || (vdp.reg[0] & 4))
 	{
 		render_bg = render_bg_sms;
 		render_obj = render_obj_sms;
@@ -412,30 +626,25 @@ void render_reset(void)
 
 static int32_t prev_line = -1;
 
-/* Draw a line of the display */
-void render_line(int32_t line)
+static int render_line_to_index_buffer(int chip, int32_t line, uint8_t *dst, int transparent_blank, int32_t *out_vline)
 {
 	int32_t view = 1;
+	int32_t width = bitmap.viewport.w + 2 * bitmap.viewport.x;
 
-	/* Ensure we have not already rendered this line */
-	if (prev_line == line) return;
-	prev_line = line;
+	render_select_context(chip);
+	vdp.line = line;
 
 	/* Ensure we're within the VDP active area (incl. overscan) */
 	int32_t top_border = active_border[sms.display][vdp.extended];
 	int32_t vline = (line + top_border) % vdp.lpf;
 	
-	if (vline >= active_range[sms.display]) return;
+	if (vline >= active_range[sms.display]) return 0;
 
 	/* adjust for Game Gear screen */
 	top_border = top_border + (vdp.height - bitmap.viewport.h) / 2;
 
 	/* Point to current line in output buffer */
-	#ifdef _8BPP_COLOR
-	linebuf = &bitmap.data[(line * bitmap.pitch)];
-	#else
-	linebuf = &internal_buffer[0];
-	#endif
+	linebuf = dst;
 
 	/* Sprite limit flag is set at the beginning of the line */
 	if (vdp.spr_ovr)
@@ -468,11 +677,6 @@ void render_line(int32_t line)
 			/* Draw sprites */
 			render_obj(line);
 
-			/* This can take some CPU time. Some targets like the Retromini RS-90 code will crop this section
-			 * as to make sure it fits on the screen and to avoid less artifacts from downscaling.
-			 * This can be useful for other targets as well but adding a test case
-			 * to check this might make it more expensive so best to do this only for the RS-90.
-			 * */
 #ifndef NOBLANKING_LEFTCOLUM
 			/* Blank leftmost column of display */
 			if((vdp.reg[0] & 0x20) && (IS_SMS || IS_MD))
@@ -481,8 +685,8 @@ void render_line(int32_t line)
 		}
 		else
 		{
-			/* Background color */
-			memset(linebuf, BACKDROP_COLOR, bitmap.viewport.w + 2*bitmap.viewport.x);
+			/* Background color or transparent disabled front layer */
+			memset(linebuf, transparent_blank ? 0 : BACKDROP_COLOR, width);
 		}
 	}
 
@@ -497,14 +701,108 @@ void render_line(int32_t line)
 	{
 		/* adjust output line */
 		vline -= top_border;
-		#ifndef _8BPP_COLOR
-		#ifdef SMSPLUS_RENDER_32BPP
-		remap_8_to_32(vline);
-		#else
-		remap_8_to_16(vline);
-		#endif
-		#endif
+		if (out_vline) *out_vline = vline;
 	}
+	return view;
+}
+
+#ifndef _8BPP_COLOR
+static void systeme_remap_composited_line(int32_t line, uint8_t *back, uint8_t *front)
+{
+	int32_t i;
+	int32_t width = bitmap.viewport.w + 2 * bitmap.viewport.x;
+
+	LOCK_VIDEO
+
+#ifdef SMSPLUS_RENDER_32BPP
+	uint32_t *p = (uint32_t *)&bitmap.data[(line * bitmap.pitch)];
+	for (i = 0; i < width; i++)
+	{
+		uint8_t f = front[i];
+		uint8_t b = back[i];
+		p[i] = (f & 0x0f) ? systeme_pixel[f & PIXEL_MASK] : pixel[b & PIXEL_MASK];
+	}
+#else
+	uint16_t *p = (uint16_t *)&bitmap.data[(line * bitmap.pitch)];
+	for (i = 0; i < width; i++)
+	{
+		uint8_t f = front[i];
+		uint8_t b = back[i];
+		p[i] = (f & 0x0f) ? systeme_pixel[f & PIXEL_MASK] : pixel[b & PIXEL_MASK];
+	}
+#endif
+
+	UNLOCK_VIDEO
+}
+#endif
+
+static void render_line_systeme(int32_t line)
+{
+	int32_t vline0 = 0, vline1 = 0;
+	int view0, view1;
+
+	if (!systeme_render_ready())
+		return;
+
+	memset(systeme_back_line, 0, 0x200);
+	memset(systeme_front_line, 0, 0x200);
+
+	/* System E's 0xba/0xbb VDP is the back layer and 0xbe/0xbf is the front layer.
+	 * Skip the front-layer renderer while the second VDP display is disabled;
+	 * this keeps single-VDP games such as Tetris on the cheaper path while
+	 * preserving the dual-VDP path for Transformer and the other layered games. */
+	view0 = render_line_to_index_buffer(0, line, systeme_back_line, 0, &vline0);
+	view1 = (vdp2.reg[1] & 0x40) ? render_line_to_index_buffer(1, line, systeme_front_line, 1, &vline1) : 0;
+
+	if (view0 || view1)
+	{
+		int32_t out_line = view0 ? vline0 : vline1;
+#ifdef _8BPP_COLOR
+		int32_t i;
+		uint8_t *p = &bitmap.data[(out_line * bitmap.pitch)];
+		int32_t width = bitmap.viewport.w + 2 * bitmap.viewport.x;
+		for (i = 0; i < width; i++)
+			p[i] = (systeme_front_line[i] & 0x0f) ? systeme_front_line[i] : systeme_back_line[i];
+#else
+		systeme_remap_composited_line(out_line, systeme_back_line, systeme_front_line);
+#endif
+	}
+
+	render_select_context(0);
+}
+
+/* Draw a line of the display */
+void render_line(int32_t line)
+{
+	int32_t vline = 0;
+
+	/* Ensure we have not already rendered this line */
+	if (prev_line == line) return;
+	prev_line = line;
+
+	if (sms.console == CONSOLE_SYSTEME)
+	{
+		render_line_systeme(line);
+		return;
+	}
+
+#ifdef _8BPP_COLOR
+	if (render_line_to_index_buffer(0, line, &bitmap.data[(line * bitmap.pitch)], 0, &vline))
+	{
+		(void)vline;
+	}
+#else
+	if (render_line_to_index_buffer(0, line, &internal_buffer[0], 0, &vline))
+	{
+#ifdef SMSPLUS_RENDER_32BPP
+		remap_8_to_32(vline);
+#else
+		remap_8_to_16(vline);
+#endif
+	}
+#endif
+
+	render_select_context(0);
 }
 
 /* Draw the Master System background */
@@ -703,21 +1001,34 @@ void render_obj_sms(int32_t line)
 }
 
 /* Update a palette entry */
-void palette_sync(int32_t index)
+#ifndef _8BPP_COLOR
+#ifdef SMSPLUS_RENDER_32BPP
+typedef uint32_t native_pixel_t;
+#else
+typedef uint16_t native_pixel_t;
+#endif
+#endif
+
+static void palette_sync_target(vdp_t *ctx, int32_t index
+#ifndef _8BPP_COLOR
+	, native_pixel_t *dst
+#endif
+)
 {
 	int32_t r, g, b;
+	int32_t mode4 = (ctx->reg[0] & 4) || IS_GG;
 	
 	/* VDP Mode */
-	if ((vdp.reg[0] & 4) || IS_GG)
+	if (mode4)
 	{
 		/* Mode 4 or Game Gear TMS mode*/
 		if(sms.console == CONSOLE_GG)
 		{
 			/* GG palette */
 			/* ----BBBBGGGGRRRR */
-			r = (vdp.cram[(index << 1) | (0)] >> 0) & 0x0F;
-			g = (vdp.cram[(index << 1) | (0)] >> 4) & 0x0F;
-			b = (vdp.cram[(index << 1) | (1)] >> 0) & 0x0F;
+			r = (ctx->cram[(index << 1) | (0)] >> 0) & 0x0F;
+			g = (ctx->cram[(index << 1) | (0)] >> 4) & 0x0F;
+			b = (ctx->cram[(index << 1) | (1)] >> 0) & 0x0F;
 
 			r = gg_cram_expand_table[r];
 			g = gg_cram_expand_table[g];
@@ -725,11 +1036,11 @@ void palette_sync(int32_t index)
 		}
 		else
 		{
-			/* SMS palette */
+			/* SMS/System E palette */
 			/* --BBGGRR */
-			r = (vdp.cram[index] >> 0) & 3;
-			g = (vdp.cram[index] >> 2) & 3;
-			b = (vdp.cram[index] >> 4) & 3;
+			r = (ctx->cram[index] >> 0) & 3;
+			g = (ctx->cram[index] >> 2) & 3;
+			b = (ctx->cram[index] >> 4) & 3;
 			
 			r = sms_cram_expand_table[r];
 			g = sms_cram_expand_table[g];
@@ -763,20 +1074,35 @@ void palette_sync(int32_t index)
 		}
 	}
 	
-	
 	#ifdef _8BPP_COLOR
     bitmap.pal.color[index][0] = r;
     bitmap.pal.color[index][1] = g;
     bitmap.pal.color[index][2] = b;
 	bitmap.pal.dirty[index] = bitmap.pal.update = 1;
 	#else
-	pixel[index] = MAKE_PIXEL(r, g, b);
+	dst[index] = MAKE_PIXEL(r, g, b);
 #ifndef SMSPLUS_RENDER_32BPP
 #ifndef SMSPLUS_DISABLE_FAST_REMAP
 	remap16_pair_dirty = 1;
 #endif
 #endif
 	#endif
+}
+
+void palette_sync_chip(int chip, int32_t index)
+{
+	if (chip && !systeme_render_ready())
+		return;
+#ifndef _8BPP_COLOR
+	palette_sync_target(chip ? &vdp2 : vdp_main_ptr, index, chip ? systeme_pixel : pixel);
+#else
+	palette_sync_target(chip ? &vdp2 : vdp_main_ptr, index);
+#endif
+}
+
+void palette_sync(int32_t index)
+{
+	palette_sync_chip(0, index);
 }
 
 static void parse_satb(int32_t line)
@@ -975,7 +1301,7 @@ static void remap_8_to_16(int32_t line)
 	
 	LOCK_VIDEO
 
-	if ((sms.console == CONSOLE_GG) && option.lcd_persistence)
+	if ((sms.console == CONSOLE_GG) && option.lcd_persistence && lcd_persistence_alloc())
 	{
 		uint32_t pitch_pixels = bitmap.pitch >> 1;
 		for(i = 0; i < width; i++)
@@ -1025,7 +1351,7 @@ static void remap_8_to_32(int32_t line)
 	
 	LOCK_VIDEO
 
-	if ((sms.console == CONSOLE_GG) && option.lcd_persistence)
+	if ((sms.console == CONSOLE_GG) && option.lcd_persistence && lcd_persistence_alloc())
 	{
 		uint32_t pitch_pixels = bitmap.pitch >> 2;
 		for(i = 0; i < width; i++)

@@ -40,13 +40,92 @@ static int16_t **psg_buffer;
 static int32_t *smptab;
 static int32_t smptab_len;
 
-#ifndef MAXIM_PSG
-sn76489_t psg_sn;
-#endif
-
-#ifdef MAME_PSG
 static uint8_t machine_psg = 0;
-#endif
+static uint8_t systeme_dual_psg = 0;
+static uint8_t arcade_dual_psg = 0;
+static int16_t *systeme_psg2_stream[2] = { NULL, NULL };
+static sn76489_t systeme_psg2;
+
+static int16_t mix_saturate_i16(int32_t v)
+{
+	if (v > 32767) return 32767;
+	if (v < -32768) return -32768;
+	return (int16_t)v;
+}
+
+static void psg_write_backend(uint8_t chip, uint8_t data)
+{
+	if (chip == 0)
+	{
+		SN76489_Write(data);
+		return;
+	}
+	{
+		sn76489_t saved = PSG;
+		PSG = systeme_psg2;
+		SN76489_Write(data);
+		systeme_psg2 = PSG;
+		PSG = saved;
+	}
+}
+
+static void psg_update_backend(uint8_t chip, int16_t **buffer, int32_t length)
+{
+	if (length <= 0)
+		return;
+	if (chip == 0)
+	{
+		SN76489_Update(buffer, length);
+		return;
+	}
+	{
+		sn76489_t saved = PSG;
+		PSG = systeme_psg2;
+		SN76489_Update(buffer, length);
+		systeme_psg2 = PSG;
+		PSG = saved;
+	}
+}
+
+static void systeme_psg2_init(void)
+{
+	if (arcade_dual_psg)
+	{
+		sn76489_t saved = PSG;
+		SN76489_Init(0, 4000000, snd.sample_rate);
+		systeme_psg2 = PSG;
+		PSG = saved;
+	}
+	else
+	{
+		systeme_psg2 = PSG;
+	}
+}
+
+static void systeme_psg2_reset(void)
+{
+	if (systeme_dual_psg)
+		systeme_psg2_init();
+}
+
+static void systeme_mix_second_psg(int16_t **dst, int32_t start, int32_t length)
+{
+	int32_t i;
+	int16_t *psg2[2];
+
+	if (!systeme_dual_psg || !systeme_psg2_stream[0] || !systeme_psg2_stream[1] || length <= 0)
+		return;
+
+	psg2[0] = systeme_psg2_stream[0] + start;
+	psg2[1] = systeme_psg2_stream[1] + start;
+	psg_update_backend(1, psg2, length);
+
+	for (i = 0; i < length; i++)
+	{
+		dst[0][i] = mix_saturate_i16((int32_t)dst[0][i] + (int32_t)psg2[0][i]);
+		dst[1][i] = mix_saturate_i16((int32_t)dst[1][i] + (int32_t)psg2[1][i]);
+	}
+}
 
 uint32_t SMSPLUS_sound_init(void)
 {
@@ -59,26 +138,20 @@ uint32_t SMSPLUS_sound_init(void)
 	snd.fps = (sms.display == DISPLAY_NTSC) ? FPS_NTSC : FPS_PAL;
 	snd.fm_clock = (sms.display == DISPLAY_NTSC) ? CLOCK_NTSC : CLOCK_PAL;
 	snd.psg_clock = (sms.display == DISPLAY_NTSC) ? CLOCK_NTSC : CLOCK_PAL;
+	if (sms.console == CONSOLE_SYSTEM1)
+		snd.psg_clock = 2000000;
 	snd.sample_rate = SOUND_FREQUENCY;
 	snd.mixer_callback = NULL;
+	arcade_dual_psg = (sms.console == CONSOLE_SYSTEM1);
+	systeme_dual_psg = (sms.console == CONSOLE_SYSTEME) || arcade_dual_psg;
 	
 	/* Save register settings */
 	if(snd.enabled)
 	{
 		restore_sound = 1;
-		#if defined(MAME_PSG)
 		psgbuf = malloc(sizeof(PSG));
 		if (!psgbuf) return 0;
 		memcpy(psgbuf, &PSG, sizeof(PSG));
-		#elif defined(MAXIM_PSG)
-		psgbuf = malloc(SN76489_GetContextSize ());
-		if (!psgbuf) return 0;
-		memcpy (psgbuf, SN76489_GetContextPtr (0),SN76489_GetContextSize ());
-		#else
-		psgbuf = malloc(sizeof(sn76489_t));
-		if (!psgbuf) return 0;
-		memcpy (&psg_sn, psgbuf, sizeof(sn76489_t));
-		#endif
 		fmbuf = malloc(FM_GetContextSize());
 		if (!fmbuf) return 0;
 		FM_GetContext(fmbuf);
@@ -147,49 +220,39 @@ uint32_t SMSPLUS_sound_init(void)
 	fm_buffer = (int16_t **)&snd.stream[STREAM_FM_MO];
 	psg_buffer = (int16_t **)&snd.stream[STREAM_PSG_L];
 
+	if (systeme_dual_psg)
+	{
+		systeme_psg2_stream[0] = malloc(snd.buffer_size);
+		systeme_psg2_stream[1] = malloc(snd.buffer_size);
+		if (!systeme_psg2_stream[0] || !systeme_psg2_stream[1]) return 0;
+		memset(systeme_psg2_stream[0], 0, snd.buffer_size);
+		memset(systeme_psg2_stream[1], 0, snd.buffer_size);
+	}
+
 	/* Set up SN76489 emulation */
-	#ifdef MAME_PSG
 	switch(sms.console)
 	{
-		default:
-			machine_psg = 0;
-		break;
+		default: machine_psg = 0; break;
 		case CONSOLE_GG:
-		case CONSOLE_GGMS:
-			machine_psg = 1;
-		break;
-		case CONSOLE_COLECO:
-			machine_psg = 2;
-		break;
+		case CONSOLE_GGMS: machine_psg = 1; break;
+		case CONSOLE_COLECO: machine_psg = 2; break;
 		case CONSOLE_SG1000:
 		case CONSOLE_SC3000:
-		case CONSOLE_SF7000:
-			machine_psg = 3;
-		break;
+		case CONSOLE_SF7000: machine_psg = 3; break;
 	}
 	SN76489_Init(machine_psg, snd.psg_clock, snd.sample_rate);
-	#elif defined(MAXIM_PSG)
-    SN76489_Init(0, snd.psg_clock, snd.sample_rate);
-    SN76489_Config(0, MUTE_ALLON, BOOST_ON, VOL_FULL, (sms.console < CONSOLE_SMS) ? FB_SC3000 : FB_SEGAVDP);
-    #else
-	sn76489_init(&psg_sn, (float)snd.psg_clock, (float)snd.sample_rate, 
-	(sms.console < CONSOLE_SMS) ? SN76489_NOISE_BITS_SG1000 : SN76489_NOISE_BITS_SMS, 
-	(sms.console < CONSOLE_SMS) ? SN76489_NOISE_TAPPED_SG1000 : SN76489_NOISE_TAPPED_SMS);
-	#endif
+	if (systeme_dual_psg)
+		systeme_psg2_init();
 
 	/* Set up YM2413 emulation */
 	FM_Init();
+	if (sms.console == CONSOLE_SNKPSYCHOS)
+		snk_psychos_sound_reset();
 
 	/* Restore YM2413 register settings */
 	if(restore_sound)
 	{
-		#if defined(MAME_PSG)
-		memcpy (&PSG, psgbuf, sizeof(PSG));
-		#elif defined(MAXIM_PSG)
-		memcpy (SN76489_GetContextPtr (0),psgbuf,SN76489_GetContextSize ());
-		#else
-		memcpy (&psg_sn, psgbuf, sizeof(sn76489_t));
-		#endif
+		memcpy(&PSG, psgbuf, sizeof(PSG));
 		FM_SetContext(fmbuf);
 		free(fmbuf);
 		free(psgbuf);
@@ -219,6 +282,17 @@ void SMSPLUS_sound_shutdown(void)
 		}
 	}
 
+	if(systeme_psg2_stream[0])
+	{
+		free(systeme_psg2_stream[0]);
+		systeme_psg2_stream[0] = NULL;
+	}
+	if(systeme_psg2_stream[1])
+	{
+		free(systeme_psg2_stream[1]);
+		systeme_psg2_stream[1] = NULL;
+	}
+
 	/* Free sound output buffers */
 	if(snd.output)
 	{
@@ -233,10 +307,7 @@ void SMSPLUS_sound_shutdown(void)
 		smptab = NULL;
 	}
 	
-	/* Shut down SN76489 emulation */
-    #ifdef MAXIM_PSG
-    SN76489_Shutdown();
-    #endif
+	/* Shut down SN76489 emulation: no heap-backed PSG resources in the MAME backend. */
 	/* Shut down YM2413 emulation */
 	FM_Shutdown();
 }
@@ -248,18 +319,13 @@ void SMSPLUS_sound_reset(void)
 		return;
 
 	/* Reset SN76489 emulator */
-	#if defined(MAME_PSG)
 	SN76489_Init(machine_psg, snd.psg_clock, snd.sample_rate);
-	#elif defined(MAXIM_PSG)
-	SN76489_Reset(0);
-	#else
-	sn76489_reset(&psg_sn, (float)snd.psg_clock, (float)snd.sample_rate,
-	(sms.console < CONSOLE_SMS) ? SN76489_NOISE_BITS_SG1000 : SN76489_NOISE_BITS_SMS, 
-	(sms.console < CONSOLE_SMS) ? SN76489_NOISE_TAPPED_SG1000 : SN76489_NOISE_TAPPED_SMS);
-	#endif
+	systeme_psg2_reset();
 	
 	/* Reset YM2413 emulator */
 	FM_Reset();
+	if (sms.console == CONSOLE_SNKPSYCHOS)
+		snk_psychos_sound_reset();
 }
 
 
@@ -278,17 +344,21 @@ void SMSPLUS_sound_update(int32_t line)
 		fm[0]  = fm_buffer[0] + snd.done_so_far;
 		fm[1]  = fm_buffer[1] + snd.done_so_far;
 
-		/* Generate SN76489 sample data */
-		#if defined(MAME_PSG)
-		SN76489_Update(psg, snd.sample_count - snd.done_so_far);
-		#elif defined(MAXIM_PSG)
-		SN76489_Update(0, psg, snd.sample_count - snd.done_so_far);
-		#else
-		sn76489_execute_samples(&psg_sn, psg[0], psg[1], snd.sample_count - snd.done_so_far);
-		#endif
+		/* Generate SN76489 sample data.  Psycho Soldier hardware has no SN76489;
+		 * leaving the already-zero PSG buffers untouched avoids thousands of
+		 * no-op PSG update calls per second. */
+		if (sms.console != CONSOLE_SNKPSYCHOS)
+		{
+			psg_update_backend(0, psg, snd.sample_count - snd.done_so_far);
+			if (systeme_dual_psg)
+				systeme_mix_second_psg(psg, snd.done_so_far, snd.sample_count - snd.done_so_far);
+		}
 
-		/* Generate YM2413 sample data */
-		FM_Update(fm, snd.sample_count - snd.done_so_far);
+		/* Generate FM sample data */
+		if (sms.console == CONSOLE_SNKPSYCHOS)
+			snk_psychos_sound_update(fm, snd.sample_count - snd.done_so_far);
+		else
+			FM_Update(fm, snd.sample_count - snd.done_so_far);
 
 		/* Mix streams into output buffer */
 		snd.mixer_callback(snd.output, snd.sample_count);
@@ -307,27 +377,22 @@ void SMSPLUS_sound_update(int32_t line)
 		fm[1]  = fm_buffer[1] + snd.done_so_far;
 
 		/* Generate SN76489 sample data */
-		#if defined(MAME_PSG)
-		SN76489_Update(psg, tinybit);
-		#elif defined(MAXIM_PSG)
-		SN76489_Update(0, psg, tinybit);
-		#else
-		sn76489_execute_samples(&psg_sn, psg[0], psg[1], tinybit);
-		#endif
+		if (sms.console != CONSOLE_SNKPSYCHOS)
+		{
+			psg_update_backend(0, psg, tinybit);
+			if (systeme_dual_psg)
+				systeme_mix_second_psg(psg, snd.done_so_far, tinybit);
+		}
 
-		/* Generate YM2413 sample data */
-		FM_Update(fm, tinybit);
+		/* Generate FM sample data */
+		if (sms.console == CONSOLE_SNKPSYCHOS)
+			snk_psychos_sound_update(fm, tinybit);
+		else
+			FM_Update(fm, tinybit);
 
 		/* Sum total */
 		snd.done_so_far += tinybit;
 	}
-}
-
-static int16_t mix_saturate_i16(int32_t v)
-{
-	if (v > 32767) return 32767;
-	if (v < -32768) return -32768;
-	return (int16_t)v;
 }
 
 /* Generic FM+PSG stereo mixer callback */
@@ -337,7 +402,8 @@ void SMSPLUS_sound_mixer_callback(int16_t *output, int32_t length)
 	int32_t level = option.soundlevel ? option.soundlevel : 1;
 	for(i = 0; i < length; i++)
 	{
-		int32_t temp = ((int32_t)fm_buffer[0][i] + (int32_t)fm_buffer[1][i]) / 2;
+		/* FM buffers are YM2413 melody/rhythm buses, not stereo channels. */
+		int32_t temp = (int32_t)fm_buffer[0][i] + (int32_t)fm_buffer[1][i];
 		output[i * 2] = mix_saturate_i16((temp + (int32_t)psg_buffer[0][i]) * level);
 		output[i * 2 + 1] = mix_saturate_i16((temp + (int32_t)psg_buffer[1][i]) * level);
 	}
@@ -351,27 +417,21 @@ void psg_stereo_w(int32_t data)
 {
 	SMSPLUS_TRACE_PSG_WRITE(0x0001, (uint8_t)data);
 	/*if(!snd.enabled) return;*/
-	#if defined(MAME_PSG)
 	SN76489_GGStereoWrite(data);
-	#elif defined(MAXIM_PSG)
-	SN76489_GGStereoWrite(0, data);
-	#else
-	sn76489_set_output_channels(&psg_sn, data);
-	#endif
 }
 
 
+void psg_write_chip(int32_t chip, int32_t data)
+{
+	uint8_t target = (systeme_dual_psg && chip) ? 1 : 0;
+	SMSPLUS_TRACE_PSG_WRITE(target ? 0x0002 : 0x0000, (uint8_t)data);
+	/*if(!snd.enabled) return;*/
+	psg_write_backend(target, (uint8_t)data);
+}
+
 void psg_write(int32_t data)
 {
-	SMSPLUS_TRACE_PSG_WRITE(0x0000, (uint8_t)data);
-	/*if(!snd.enabled) return;*/
-	#if defined(MAME_PSG)
-	SN76489_Write(data);
-	#elif defined(MAXIM_PSG)
-	SN76489_Write(0, data);
-	#else
-	sn76489_write(&psg_sn, data);
-	#endif
+	psg_write_chip(0, data);
 }
 
 /*--------------------------------------------------------------------------*/

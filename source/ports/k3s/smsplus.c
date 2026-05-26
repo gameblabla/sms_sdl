@@ -10,6 +10,7 @@
 #include "shared.h"
 #include "scaler.h"
 #include "smsplus.h"
+#include "sdl12_common.h"
 #include "text_gui.h"
 #include "bigfontwhite.h"
 #include "bigfontred.h"
@@ -193,60 +194,13 @@ static void video_update()
 
 void smsp_state(uint8_t slot_number, uint8_t mode)
 {
-	// Save and Load States
-	char stpath[PATH_MAX];
-	snprintf(stpath, sizeof(stpath), "%s%s.st%d", gdata.stdir, gdata.gamename, slot_number);
-	FILE *fd;
-	
-	switch(mode) {
-		case 0:
-			fd = fopen(stpath, "wb");
-			if (fd) {
-				system_save_state(fd);
-				fclose(fd);
-			}
-			break;
-		
-		case 1:
-			fd = fopen(stpath, "rb");
-			if (fd) {
-				system_load_state(fd);
-				fclose(fd);
-			}
-			break;
-	}
+	smsplus_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
 }
 
-void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode) 
+void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
 {
-	// Set up save file name
-	FILE *fd;
-	switch(mode) 
-	{
-		case SRAM_SAVE:
-			if(sms.save) 
-			{
-				fd = fopen(gdata.sramfile, "wb");
-				if (fd) 
-				{
-					fwrite(sram, 0x8000, 1, fd);
-					fclose(fd);
-				}
-			}
-			break;
-		
-		case SRAM_LOAD:
-			fd = fopen(gdata.sramfile, "rb");
-			if (fd) 
-			{
-				sms.save = 1;
-				fread(sram, 0x8000, 1, fd);
-				fclose(fd);
-			}
-			else
-				memset(sram, 0x00, 0x8000);
-			break;
-	}
+	(void)slot_number;
+	smsplus_sdl12_sram_file(gdata.sramfile, sram, mode);
 }
 
 static void bios_init()
@@ -643,6 +597,7 @@ static void Controls_papk3s()
 	int16_t x_move = 0, y_move = 0;
 	uint8_t *keystate;
 	keystate = SDL_GetKeyState(NULL);
+	smsplus_sdl12_update_arcade_from_key_state(keystate);
 	
 	if (sms.console == CONSOLE_COLECO)
     {
@@ -693,7 +648,13 @@ static void Controls_papk3s()
 		else
 			input.pad[i] &= ~INPUT_BUTTON1;
 
-		if(((i == 0) && (SDL_JoystickGetButton(joystick[i], 9) == SDL_PRESSED)) || (keystate[SDLK_RETURN]))
+		if (smsplus_sdl12_arcade_active())
+		{
+			if ((i == 0) && (SDL_JoystickGetButton(joystick[i], 9) == SDL_PRESSED))
+				smsplus_sdl12_set_arcade_button(INPUT_ARCADE_START1, 1);
+			input.system &= (uint8_t)~(INPUT_START | INPUT_PAUSE);
+		}
+		else if (((i == 0) && (SDL_JoystickGetButton(joystick[i], 9) == SDL_PRESSED)) || (keystate[SDLK_RETURN]))
 			input.system |= (sms.console == CONSOLE_GG) ? INPUT_START : INPUT_PAUSE;
 		else
 			input.system &= (sms.console == CONSOLE_GG) ? ~INPUT_START : ~INPUT_PAUSE;
@@ -811,7 +772,7 @@ int main (int argc, char *argv[])
 	
 	// Set parameters for internal bitmap
 	bitmap.width = VIDEO_WIDTH_SMS;
-	bitmap.height = VIDEO_HEIGHT_SMS;
+	bitmap.height = sms_bitmap->h;
 	bitmap.depth = 16;
 	bitmap.data = (uint8_t *)sms_bitmap->pixels;
 	bitmap.pitch = sms_bitmap->pitch;
@@ -832,6 +793,8 @@ int main (int argc, char *argv[])
 	// Loop until the user closes the window
 	while (!quit) 
 	{
+		smsplus_sdl12_frame_update();
+
 		// Execute frame(s)
 		system_frame(0);
 		

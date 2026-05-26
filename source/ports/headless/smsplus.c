@@ -9,8 +9,8 @@
 #include "shared.h"
 #include "headless_platform.h"
 
-#define HEADLESS_BITMAP_WIDTH 256
-#define HEADLESS_BITMAP_HEIGHT 313
+#define HEADLESS_BITMAP_WIDTH 400
+#define HEADLESS_BITMAP_HEIGHT 400
 
 t_config option;
 static void *headless_pixels;
@@ -43,7 +43,7 @@ static void usage(const char *argv0)
         "\n"
         "Core options:\n"
         "  --frames N                 Run N frames (default: 300)\n"
-        "  --console NAME             auto,sms,sms2,gg,ggms,sg1000,coleco,sordm5\n"
+        "  --console NAME             auto,sms,sms2,gg,ggms,sg1000,coleco,sordm5,systeme,system1,psychos\n"
         "  --region NAME              auto,ntsc,pal,japan\n"
         "  --bios PATH                BIOS for the selected legacy machine; for .m5 this is Sord M5\n"
         "  --sms-bios PATH            SMS BIOS file\n"
@@ -106,6 +106,9 @@ static int set_console_option(const char *name)
     else if (!strcasecmp(name, "sg1000")) option.console = 5;
     else if (!strcasecmp(name, "coleco")) option.console = 6;
     else if (!strcasecmp(name, "sordm5") || !strcasecmp(name, "m5")) option.console = 7;
+    else if (!strcasecmp(name, "systeme") || !strcasecmp(name, "segae")) option.console = 8;
+    else if (!strcasecmp(name, "system1") || !strcasecmp(name, "segas1") || !strcasecmp(name, "sega1")) option.console = 9;
+    else if (!strcasecmp(name, "psychos") || !strcasecmp(name, "snkpsychos") || !strcasecmp(name, "snk")) option.console = 10;
     else return 0;
     return 1;
 }

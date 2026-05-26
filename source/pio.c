@@ -143,7 +143,7 @@ void pio_ctrl_w(uint8_t data)
        (th_level[0] == PIN_LVL_LO)
       )
   {
-    sms.hlatch = hc_256[z80_get_elapsed_cycles() % CYCLES_PER_LINE];
+    sms.hlatch = hc_256[system_hcounter_index()];
   }
 
   /* update port value */
@@ -238,7 +238,7 @@ static uint8_t device_r(int32_t port)
       /* check TH INPUT */
       if (io_current->th_dir[port] == PIN_DIR_IN)
       {
-        int32_t hc = hc_256[z80_get_elapsed_cycles() % CYCLES_PER_LINE];
+        int32_t hc = hc_256[system_hcounter_index()];
         int32_t dx = input.analog[port][0] - (hc*2);
         int32_t dy = input.analog[port][1] - vdp.line;
 

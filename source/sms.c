@@ -46,6 +46,74 @@ t_coleco coleco;
 uint8_t dummy_write[0x400];
 uint8_t dummy_read[0x400];
 
+static uint8_t systeme_ram[0x4000];
+static uint8_t systeme_bank;
+static uint8_t systeme_vram_write_bank;
+
+static void systeme_map_banked_rom(uint8_t bank)
+{
+    uint_fast8_t i;
+    uint32_t base = 0x10000u + ((uint32_t)(bank & 0x0f) << 14);
+
+    for (i = 0x20; i <= 0x2F; i++)
+    {
+        uint32_t offset = base + ((uint32_t)(i & 0x0F) << 10);
+        cpu_readmap[i] = (cart.loaded && offset < cart.size) ? &cart.rom[offset] : dummy_read;
+        cpu_writemap[i] = dummy_write;
+    }
+}
+
+void systeme_bank_w(uint8_t data)
+{
+    systeme_bank = data;
+    systeme_vram_write_bank = data >> 5;
+    systeme_map_banked_rom(data & 0x0F);
+    systeme_vdp_bank_w(data);
+}
+
+static void systeme_map_memory(int clear_ram)
+{
+    uint_fast8_t i;
+
+    if (clear_ram)
+        memset(systeme_ram, 0, sizeof(systeme_ram));
+
+    for (i = 0x00; i <= 0x1F; i++)
+    {
+        uint32_t offset = (uint32_t)i << 10;
+        cpu_readmap[i] = (cart.loaded && offset < cart.size) ? &cart.rom[offset] : dummy_read;
+        cpu_writemap[i] = dummy_write;
+    }
+
+    systeme_bank_w(0);
+
+    for (i = 0x30; i <= 0x3F; i++)
+    {
+        cpu_readmap[i] = &systeme_ram[(i & 0x0F) << 10];
+        cpu_writemap[i] = &systeme_ram[(i & 0x0F) << 10];
+    }
+}
+
+static void writemem_mapper_systeme(uint16_t offset, uint8_t data)
+{
+    SMSPLUS_TRACE_MEM_WRITE(offset, data);
+
+    if (offset >= 0x8000 && offset <= 0xBFFF)
+    {
+        /* System E maps this address range as banked ROM for reads and as
+         * direct VDP VRAM for writes.  Port F7 selects which VDP and which
+         * 16 KiB VRAM bank receives these direct writes. */
+        systeme_vdp_direct_write(systeme_vram_write_bank, offset & 0x3FFF, data);
+        return;
+    }
+
+    if (offset >= 0xC000)
+    {
+        cpu_writemap[offset >> 10][offset & 0x03FF] = data;
+        return;
+    }
+}
+
 static void writemem_mapper_none(uint16_t offset, uint8_t data)
 {
 	SMSPLUS_TRACE_MEM_WRITE(offset, data);
@@ -281,6 +349,10 @@ static void writemem_mapper_93c46(uint16_t offset, uint8_t data)
 
 uint8_t sms_readmem16(uint16_t address)
 {
+    if (slot.mapper == MAPPER_SYSTEM1)
+        return system1_readmem(address);
+    if (slot.mapper == MAPPER_SNKPSYCHOS)
+        return snk_psychos_readmem(address);
     if (slot.mapper == MAPPER_93C46)
         return mapper_93c46_read(address);
     if (slot.mapper == MAPPER_COLECO_MEGACART && address >= 0x8000)
@@ -291,6 +363,9 @@ uint8_t sms_readmem16(uint16_t address)
 
 void mapper_reset(void)
 {
+	if (slot.mapper != MAPPER_SNKPSYCHOS)
+		z80_select_default_context();
+	z80_data_operand_fetch = 0;
 	switch(slot.mapper)
 	{
 		case MAPPER_NONE:
@@ -317,6 +392,15 @@ void mapper_reset(void)
 		case MAPPER_COLECO_MEGACART:
 			cpu_writemem16 = writemem_mapper_none;
 		break;
+		case MAPPER_SYSTEME:
+			cpu_writemem16 = writemem_mapper_systeme;
+		break;
+		case MAPPER_SYSTEM1:
+			cpu_writemem16 = system1_writemem;
+		break;
+		case MAPPER_SNKPSYCHOS:
+			cpu_writemem16 = snk_psychos_writemem;
+		break;
 		default:
 			cpu_writemem16 = writemem_mapper_sega;
 		break;
@@ -334,6 +418,7 @@ void mapper_restore_state(void)
 
     mapper_reset();
 
+#if SMSPLUS_ENABLE_COLECO
     if (sms.console == CONSOLE_COLECO)
     {
         /* Restore the fixed ColecoVision address map, then re-apply the
@@ -370,8 +455,9 @@ void mapper_restore_state(void)
         }
         return;
     }
+#endif
 
-#ifdef SORDM5_EMU
+#if SMSPLUS_ENABLE_SORDM5
     if (sms.console == CONSOLE_SORDM5)
     {
         for (i = 0x00; i < 0x40; i++)
@@ -398,6 +484,24 @@ void mapper_restore_state(void)
         return;
     }
 #endif
+
+    if (sms.console == CONSOLE_SYSTEME)
+    {
+        systeme_map_memory(0);
+        return;
+    }
+
+    if (sms.console == CONSOLE_SYSTEM1)
+    {
+        system1_memory_map(0);
+        return;
+    }
+
+    if (sms.console == CONSOLE_SNKPSYCHOS)
+    {
+        snk_psychos_memory_map(0);
+        return;
+    }
 
     if ((sms.console != CONSOLE_SG1000) && (sms.console != CONSOLE_SF7000) && (sms.console != CONSOLE_SC3000))
     {
@@ -430,12 +534,14 @@ void sms_init(void)
 	/* Initialize port handlers */
 	switch(sms.console)
 	{
+#if SMSPLUS_ENABLE_COLECO
 		case CONSOLE_COLECO:
 			cpu_writeport16 = coleco_port_w;
 			cpu_readport16 = coleco_port_r;
 			data_bus_pullup = 0xFF;
 		break;
-		#ifdef SORDM5_EMU
+#endif
+		#if SMSPLUS_ENABLE_SORDM5
 		case CONSOLE_SORDM5:
 			cpu_writeport16 = sordm5_port_w;
 			cpu_readport16 = sordm5_port_r;
@@ -458,6 +564,24 @@ void sms_init(void)
 		case CONSOLE_SMS2:
 			cpu_writeport16 = sms_port_w;
 			cpu_readport16 = sms_port_r;
+			data_bus_pullup = 0xFF;
+		break;
+
+		case CONSOLE_SYSTEME:
+			cpu_writeport16 = systeme_port_w;
+			cpu_readport16 = systeme_port_r;
+			data_bus_pullup = 0xFF;
+		break;
+
+		case CONSOLE_SYSTEM1:
+			cpu_writeport16 = system1_port_w;
+			cpu_readport16 = system1_port_r;
+			data_bus_pullup = 0xFF;
+		break;
+
+		case CONSOLE_SNKPSYCHOS:
+			cpu_writeport16 = snk_psychos_port_w;
+			cpu_readport16 = snk_psychos_port_r;
 			data_bus_pullup = 0xFF;
 		break;
 
@@ -490,7 +614,8 @@ void sms_init(void)
 
 void sms_shutdown(void)
 {
-	/* Nothing to do */
+	system1_free();
+	snk_psychos_free();
 }
 
 void sms_reset(void)
@@ -540,6 +665,7 @@ void sms_reset(void)
   /* reset Memory Mapping */
   switch(sms.console)
   {
+#if SMSPLUS_ENABLE_COLECO
     case CONSOLE_COLECO:
     {
       /* $0000-$1FFF mapped to internal ROM (8K) */
@@ -584,8 +710,9 @@ void sms_reset(void)
 
       break;
     }
+#endif
 
-	#ifdef SORDM5_EMU
+	#if SMSPLUS_ENABLE_SORDM5
     case CONSOLE_SORDM5:
     {
       /*
@@ -631,6 +758,24 @@ void sms_reset(void)
       break;
     }
     #endif
+    case CONSOLE_SYSTEME:
+    {
+      systeme_map_memory(1);
+      break;
+    }
+
+    case CONSOLE_SYSTEM1:
+    {
+      system1_reset();
+      break;
+    }
+
+    case CONSOLE_SNKPSYCHOS:
+    {
+      snk_psychos_reset();
+      break;
+    }
+
     case CONSOLE_SC3000:
     case CONSOLE_SF7000:
     {
@@ -928,7 +1073,7 @@ void mapper_16k_w(uint16_t address, uint8_t data)
 
 int32_t sms_irq_callback(int32_t param)
 {
-	#ifdef SORDM5_EMU
+	#if SMSPLUS_ENABLE_SORDM5
 	if (sms.console == CONSOLE_SORDM5)
 		return sordm5_ctc_irq_callback();
 	#endif

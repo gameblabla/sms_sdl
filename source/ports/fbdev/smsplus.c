@@ -703,7 +703,7 @@ int main (int argc, char *argv[])
 	
 	// Set parameters for internal bitmap
 	bitmap.width = VIDEO_WIDTH_SMS;
-	bitmap.height = VIDEO_HEIGHT_SMS;
+	bitmap.height = 267;
 	bitmap.depth = 16;
 	bitmap.data = (uint8_t *)sms_bitmap;
 	bitmap.pitch = 512;

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SMS Plus GX WASM</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <section id="drop" class="drop">
+      <h1>SMS Plus GX</h1>
+      <p>Drop a Master System, Game Gear, SG-1000, Coleco, System E, or supported arcade ROM here.</p>
+      <input id="file" type="file" />
+    </section>
+    <section class="screen-wrap">
+      <canvas id="screen" width="256" height="240"></canvas>
+    </section>
+    <section class="toolbar">
+      <button id="pause">Pause</button>
+      <button id="reset">Reset</button>
+      <button id="save-sram">Save SRAM</button>
+      <button id="load-sram">Load SRAM</button>
+      <label>Scale <input id="scale" type="range" min="1" max="5" value="3" /></label>
+    </section>
+    <section class="help">
+      <p>Controls: arrows, Z/X, Enter/Pause. Arcade: 5 coin, 1 start, 9 service, F2 test. Block Gal dial uses left/right.</p>
+      <p id="status">Build smsplusgx.wasm with <code>make -f Makefile.wasm</code>, then serve this directory over HTTP.</p>
+    </section>
+  </main>
+  <script src="wasm-ui.js"></script>
+</body>
+</html>

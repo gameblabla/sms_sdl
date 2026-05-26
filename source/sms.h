@@ -26,13 +26,9 @@
 #define SMS_H_
 
 #define CYCLES_PER_LINE 228
-
-/* Build Sord M5 support by default.  The code paths were previously
- * guarded by SORDM5_EMU but no supplied Makefile defined it, so .m5
- * files silently fell back to SMS/SG-style handling. */
-#ifndef SORDM5_EMU
-#define SORDM5_EMU 1
-#endif
+#define SYSTEME_CYCLES_PER_LINE 342
+#define SYSTEM1_CYCLES_PER_LINE 256
+#define SNK_PSYCHOS_CYCLES_PER_LINE 256
 
 enum {
 	SLOT_BIOS   = 0,
@@ -50,7 +46,10 @@ enum {
 	MAPPER_4PAK       = 5,
 	MAPPER_93C46      = 6,
 	MAPPER_WONDERKID  = 7,
-	MAPPER_COLECO_MEGACART = 8
+	MAPPER_COLECO_MEGACART = 8,
+	MAPPER_SYSTEME    = 9,
+	MAPPER_SYSTEM1    = 10,
+	MAPPER_SNKPSYCHOS = 11
 };
 
 enum {
@@ -79,6 +78,9 @@ enum {
 
 	CONSOLE_SMS     = 0x20,
 	CONSOLE_SMS2    = 0x21,
+	CONSOLE_SYSTEME = 0x22,
+	CONSOLE_SYSTEM1 = 0x23,
+	CONSOLE_SNKPSYCHOS = 0x24,
 
 	CONSOLE_GG      = 0x40,
 	CONSOLE_GGMS    = 0x41,
@@ -181,6 +183,7 @@ extern void mapper_reset(void);
 extern void mapper_restore_state(void);
 extern void mapper_8k_w(uint16_t address, uint8_t data);
 extern void mapper_16k_w(uint16_t address, uint8_t data);
+extern void systeme_bank_w(uint8_t data);
 extern int32_t sms_irq_callback(int32_t param);
 
 #endif /* _SMS_H_ */

@@ -11,6 +11,7 @@
 #include "shared.h"
 #include "scaler.h"
 #include "smsplus.h"
+#include "sdl12_common.h"
 #include "font_drawing.h"
 #include "sound_output.h"
 
@@ -95,140 +96,22 @@ static void video_update()
 
 void smsp_state(uint8_t slot_number, uint8_t mode)
 {
-	// Save and Load States
-	char stpath[PATH_MAX];
-	snprintf(stpath, sizeof(stpath), "%s%s.st%d", gdata.stdir, gdata.gamename, slot_number);
-	FILE *fd;
-	
-	switch(mode) {
-		case 0:
-			fd = fopen(stpath, "wb");
-			if (fd) {
-				system_save_state(fd);
-				fclose(fd);
-			}
-			break;
-		
-		case 1:
-			fd = fopen(stpath, "rb");
-			if (fd) {
-				system_load_state(fd);
-				fclose(fd);
-			}
-			break;
-	}
+	smsplus_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
 }
 
-void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode) 
+void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
 {
-	// Set up save file name
-	FILE *fd;
-	switch(mode) 
-	{
-		case SRAM_SAVE:
-			if(sms.save) 
-			{
-				fd = fopen(gdata.sramfile, "wb");
-				if (fd) 
-				{
-					fwrite(sram, 0x8000, 1, fd);
-					fclose(fd);
-				}
-			}
-			break;
-		
-		case SRAM_LOAD:
-			fd = fopen(gdata.sramfile, "rb");
-			if (fd) 
-			{
-				sms.save = 1;
-				fread(sram, 0x8000, 1, fd);
-				fclose(fd);
-			}
-			else
-				memset(sram, 0x00, 0x8000);
-			break;
-	}
+	(void)slot_number;
+	smsplus_sdl12_sram_file(gdata.sramfile, sram, mode);
 }
 
 static uint32_t sdl_controls_update_input(SDLKey k, int32_t p)
 {
-	if (sms.console == CONSOLE_COLECO)
-    {
-		coleco.keypad[0] = 0xff;
-		coleco.keypad[1] = 0xff;
-	}
-	
-	switch(k)
-	{
-		/* At least allow them to play on the lowest difficulties,
-		 * Maybe this needs a better implementation ? */
-		case SDLK_TAB:
-			coleco.keypad[0] = 1;
-		break;
-		case SDLK_BACKSPACE:
-			coleco.keypad[0] = 2;
-		break;
-		case SDLK_END:
-		case SDLK_3:
-		case SDLK_ESCAPE:
-			if(p)
-				selectpressed = 1;
-			else
-				selectpressed = 0;
-		break;
-		case SDLK_RETURN:
-			if(p)
-				input.system |= (sms.console == CONSOLE_GG) ? INPUT_START : INPUT_PAUSE;
-			else
-				input.system &= (sms.console == CONSOLE_GG) ? ~INPUT_START : ~INPUT_PAUSE;
-		break;
-		case SDLK_UP:
-			if(p)
-				input.pad[0] |= INPUT_UP;
-			else
-				input.pad[0] &= ~INPUT_UP;
-		break;	
-		case SDLK_DOWN:
-			if(p)
-				input.pad[0] |= INPUT_DOWN;
-			else
-				input.pad[0] &= ~INPUT_DOWN;
-		break;
-		case SDLK_LEFT:
-			if(p)
-				input.pad[0] |= INPUT_LEFT;
-			else
-				input.pad[0] &= ~INPUT_LEFT;
-		break;	
-		case SDLK_RIGHT:
-			if(p)
-				input.pad[0] |= INPUT_RIGHT;
-			else
-				input.pad[0] &= ~INPUT_RIGHT;
-		break;
-		case SDLK_LALT:
-		case SDLK_SPACE:
-			if(p)
-				input.pad[0] |= INPUT_BUTTON2;
-			else
-				input.pad[0] &= ~INPUT_BUTTON2;
-		break;
-		case SDLK_LCTRL:
-		case SDLK_LSHIFT:
-			if(p)
-				input.pad[0] |= INPUT_BUTTON1;
-			else
-				input.pad[0] &= ~INPUT_BUTTON1;
-		break;	
-		default:
-		break;
-	}
-	
-	if (sms.console == CONSOLE_COLECO) input.system = 0;
-	
-	return 1;
+	smsplus_sdl12_keymap_t map;
+	smsplus_sdl12_keymap_from_config(&map, option.config_buttons);
+	return smsplus_sdl12_update_key(k, p, &map, &selectpressed);
 }
+
 
 
 static void bios_init()
@@ -640,7 +523,7 @@ int main (int argc, char *argv[])
 	
 	// Set parameters for internal bitmap
 	bitmap.width = VIDEO_WIDTH_SMS;
-	bitmap.height = VIDEO_HEIGHT_SMS;
+	bitmap.height = sms_bitmap->h;
 	bitmap.depth = 16;
 	bitmap.data = (uint8_t *)sms_bitmap->pixels;
 	bitmap.pitch = sms_bitmap->pitch;
@@ -661,6 +544,8 @@ int main (int argc, char *argv[])
 	// Loop until the user closes the window
 	while (!quit) 
 	{
+		smsplus_sdl12_frame_update();
+
 		// Execute frame(s)
 		system_frame(0);
 		

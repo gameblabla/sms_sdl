@@ -56,6 +56,7 @@ extern snd_t snd;
 
 /* Function prototypes */
 void psg_write(int32_t data);
+void psg_write_chip(int32_t chip, int32_t data);
 void psg_stereo_w(int32_t data);
 uint32_t fmunit_detect_r(void);
 void fmunit_detect_w(uint32_t data);

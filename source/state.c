@@ -33,9 +33,6 @@
 #include "shared.h"
 #include "miniz.h"
 
-#if !defined(MAXIM_PSG) && !defined(MAME_PSG)
-extern sn76489_t psg_sn;
-#endif
 
 #define STATE2_MAGIC "SPGXST2"
 #define STATE2_MAGIC_LEN 8
@@ -89,15 +86,8 @@ uint32_t system_save_state(FILE* fd)
 
     /* Save YM2413 context */
     fwrite(FM_GetContextPtr(), FM_GetContextSize(), sizeof(int8_t), fd);
-
     /* Save SN76489 context */
-    #ifdef MAXIM_PSG
-    fwrite(SN76489_GetContextPtr(0), SN76489_GetContextSize(), sizeof(int8_t), fd);
-    #elif defined(MAME_PSG)
     fwrite(&PSG, sizeof(sn76489_t), sizeof(int8_t), fd);
-    #else
-    fwrite(&psg_sn, sizeof(sn76489_t), sizeof(int8_t), fd);
-    #endif
 
     return 0;
 }
@@ -132,24 +122,11 @@ void system_load_state(FILE* fd)
     fread(buf, FM_GetContextSize(), sizeof(int8_t), fd);
     FM_SetContext(buf);
     free(buf);
-
     /* Load SN76489 context */
-    #ifdef MAXIM_PSG
-    buf = malloc(SN76489_GetContextSize());
-    fread(buf, SN76489_GetContextSize(), sizeof(int8_t), fd);
-    SN76489_SetContext(0, buf);
-    free(buf);
-    #elif defined(MAME_PSG)
     buf = malloc(sizeof(sn76489_t));
     fread(buf, sizeof(sn76489_t), sizeof(int8_t), fd);
     memcpy(&PSG, buf, sizeof(sn76489_t));
     free(buf);
-    #else
-    buf = malloc(sizeof(sn76489_t));
-    fread(buf, sizeof(sn76489_t), sizeof(int8_t), fd);
-    memcpy(&psg_sn, buf, sizeof(sn76489_t));
-    free(buf);
-    #endif
 
     mapper_restore_state();
 
