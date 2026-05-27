@@ -614,7 +614,7 @@ static void Menu()
 		else print_string("Quit", TextWhite, 0, 5, 165, backbuffer->pixels);
 
 		print_string("Build " __DATE__ ", " __TIME__, TextWhite, 0, 5, 195, backbuffer->pixels);
-		print_string("Fork of MultiRexZ80 by gameblabla", TextWhite, 0, 5, 210, backbuffer->pixels);
+		print_string("MultiRexZ80 by gameblabla", TextWhite, 0, 5, 210, backbuffer->pixels);
 		print_string("Extra code from Alekmaul, n2DLib", TextWhite, 0, 5, 225, backbuffer->pixels);
 
         while (SDL_PollEvent(&Event))

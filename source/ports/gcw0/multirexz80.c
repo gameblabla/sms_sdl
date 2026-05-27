@@ -571,7 +571,7 @@ static void Menu()
 
 		print_string("Build " __DATE__ ", " __TIME__, TextWhite, 0, 5, 195, backbuffer->pixels);
 		print_string("Based on SMS Plus GX / SMS Plus", TextWhite, 0, 5, 210, backbuffer->pixels);
-		print_string("Fork of MultiRexZ80 by gameblabla", TextWhite, 0, 5, 225, backbuffer->pixels);
+		print_string("MultiRexZ80 by gameblabla", TextWhite, 0, 5, 225, backbuffer->pixels);
 		
 		if (SDL_MUSTLOCK(backbuffer)) SDL_UnlockSurface(backbuffer);
 

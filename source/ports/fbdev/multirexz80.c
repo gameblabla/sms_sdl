@@ -528,7 +528,7 @@ static void Menu()
 		else print_string("Quit", TextWhite, 0, 5, 145, buffer_fbdev[0]);
 		
 		print_string("Based on SMS Plus GX / SMS Plus", TextWhite, 0, 5, 175, buffer_fbdev[0]);
-		print_string("Fork of MultiRexZ80 by gameblabla", TextWhite, 0, 5, 190, buffer_fbdev[0]);
+		print_string("MultiRexZ80 by gameblabla", TextWhite, 0, 5, 190, buffer_fbdev[0]);
 		print_string("Scaler : Alekmaul", TextWhite, 0, 5, 205, buffer_fbdev[0]);
 		print_string("Text drawing : n2DLib", TextWhite, 0, 5, 220, buffer_fbdev[0]);
 		

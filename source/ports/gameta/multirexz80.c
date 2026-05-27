@@ -313,7 +313,7 @@ void Menu()
 		else print_string("Quit", TextWhite, 0, 5, 145, sdl_screen->pixels);
 		
 		print_string("Based on SMS Plus GX / SMS Plus", TextWhite, 0, 5, 190, sdl_screen->pixels);
-		print_string("Fork of MultiRexZ80 by gameblabla", TextWhite, 0, 5, 215, sdl_screen->pixels);
+		print_string("MultiRexZ80 by gameblabla", TextWhite, 0, 5, 215, sdl_screen->pixels);
 		print_string("Scaler : Alekmaul", TextWhite, 0, 5, 235, sdl_screen->pixels);
 		print_string("Text drawing : n2DLib", TextWhite, 0, 5, 255, sdl_screen->pixels);
 
