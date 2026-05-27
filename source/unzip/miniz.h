@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /* miniz.c 2.0.7 - public domain deflate/inflate, zlib-subset, ZIP reading/writing/appending, PNG writing
    See "unlicense" statement at the end of this file.
    Rich Geldreich <richgel99@gmail.com>, last updated Oct. 13, 2013
@@ -468,7 +479,7 @@ typedef void *const voidpc;
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef SMSPLUS_STATIC_MEMORY
+#ifdef MULTIREXZ80_STATIC_MEMORY
 #include "static_alloc.h"
 #endif
 

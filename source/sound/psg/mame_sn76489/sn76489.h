@@ -1,9 +1,20 @@
 /*
- * Public interface for the SMS Plus GX MAME-derived SN76489 backend.
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+/*
+ * Public interface for the MultiRexZ80 MAME-derived SN76489 backend.
  *
  * Based on MAME sn76496.cpp behavior. MAME source license: BSD-3-Clause;
  * copyright-holders include Nicola Salmoria and later MAME contributors.
- * SMS Plus GX integration Copyright (C) 2026 SMS Plus GX contributors.
+ * MultiRexZ80 integration Copyright (C) 2026 gameblabla.
  */
 
 #ifndef SN76489_DEFINE
@@ -13,7 +24,7 @@
 
 /*
  * Small C wrapper around MAME's sn76496_base_device model.
- * The public shape is intentionally the same as the old SMS Plus GX MAME_PSG
+ * The public shape is intentionally the same as the old MultiRexZ80 MAME_PSG
  * backend so save states and the generic mixer can keep using a single global.
  */
 typedef struct sn76489_struct

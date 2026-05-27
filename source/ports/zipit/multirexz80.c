@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -7,26 +18,23 @@
 #include <unistd.h>
 #include <time.h>
 #include <SDL/SDL.h>
+
 #include "shared.h"
 #include "scaler.h"
-#include "smsplus.h"
+#include "multirexz80.h"
 #include "sdl12_common.h"
 #include "font_drawing.h"
+#include "sound_output.h"
 
 static gamedata_t gdata;
 
 t_config option;
 
-static SDL_Surface* sdl_screen;
-SDL_Surface *sms_bitmap;
-
 static char home_path[256];
 
-#ifdef SCALE2X_UPSCALER
-static SDL_Surface* scale2x_buf;
-static uint32_t dst_x, dst_w, dst_h;
-#endif
-
+static SDL_Surface* sdl_screen, *scale2x_buf;
+SDL_Surface *sms_bitmap;
+static SDL_Surface *backbuffer;
 extern SDL_Surface *font;
 extern SDL_Surface *bigfontred;
 extern SDL_Surface *bigfontwhite;
@@ -34,101 +42,92 @@ extern SDL_Surface *bigfontwhite;
 static uint8_t selectpressed = 0;
 static uint8_t save_slot = 0;
 static uint8_t quit = 0;
-static const uint32_t upscalers_available = 1
+
+static const int8_t upscalers_available = 1
 #ifdef SCALE2X_UPSCALER
 +1
 #endif
 ;
-double real_FPS;
-Uint32 start;
 
 static void video_update(void)
 {
-	uint32_t dst_x, dst_y, dst_w, dst_h, hide_left;
+	multirexz80_sdl12_view_t view;
+	SDL_Rect dst;
+	multirexz80_sdl12_get_active_view(&view);
+
 	if (SDL_LockSurface(sdl_screen) == 0)
 	{
+		SDL_FillRect(sdl_screen, NULL, 0);
 		switch(option.fullscreen)
 		{
-			// native res
 			case 0:
-			if(sms.console == CONSOLE_GG) 
-				bitmap_scale(48,0,160,144,160*3,144*3,256,sdl_screen->w-160*3,(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)sdl_screen->pixels+(sdl_screen->w-160*3)/2+(sdl_screen->h-144*3)/2*sdl_screen->w);
-			else 
-			{
-				hide_left = (vdp.reg[0] & 0x20) ? 1 : 0;
-				dst_x = hide_left ? 8 : 0;
-				dst_w = (hide_left ? 248 : 256);
-				bitmap_scale(dst_x,0,
-				dst_w,vdp.height,
-				dst_w*2,vdp.height*2,
-				256, sdl_screen->w-dst_w*2,
-				(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)sdl_screen->pixels+(sdl_screen->w-(dst_w*2))/2+(sdl_screen->h-(vdp.height*2))/2*sdl_screen->w);
-			}
-			break;
-			// Standard fullscreen
+				dst.x = (Sint16)((sdl_screen->w - view.w) / 2);
+				dst.y = (Sint16)((sdl_screen->h - view.h) / 2);
+				dst.w = (Uint16)view.w;
+				dst.h = (Uint16)view.h;
+				if (dst.x < 0 || dst.y < 0)
+					multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w, view.h);
+				break;
 			case 1:
-			if(sms.console == CONSOLE_GG) 
-			{
-				dst_x = 48;
-				dst_w = 160;
-				dst_h = 144;
-			}
-			else
-			{
-				hide_left = (vdp.reg[0] & 0x20) ? 1 : 0;
-				dst_x = hide_left ? 8 : 0;
-				dst_w = (hide_left ? 248 : 256);
-				dst_h = vdp.height;
-			}
-			bitmap_scale(dst_x,0,dst_w,dst_h,sdl_screen->w,sdl_screen->h,256,0,(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)sdl_screen->pixels);
-			break;
+			default:
+				dst.x = 0;
+				dst.y = 0;
+				dst.w = (Uint16)sdl_screen->w;
+				dst.h = (Uint16)sdl_screen->h;
+				break;
 			case 2:
+				multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w, view.h);
+				break;
 			case 3:
-			#ifdef SCALE2X_UPSCALER
-			if(sms.console == CONSOLE_GG) 
-			{
-				dst_x = 96;
-				dst_w = 320;
-				dst_h = 144*2;
-			}
-			else
-			{
-				hide_left = (vdp.reg[0] & 0x20) ? 1 : 0;
-				dst_x = hide_left ? 16 : 0;
-				dst_w = (hide_left ? 248 : 256)*2;
-				dst_h = vdp.height*2;
-			}
-			scale2x(sms_bitmap->pixels, scale2x_buf->pixels, 512, 1024, 256, 240);
-			bitmap_scale(dst_x,0,dst_w,dst_h,sdl_screen->w,sdl_screen->h,512,0,(uint16_t* restrict)scale2x_buf->pixels,(uint16_t* restrict)sdl_screen->pixels);
-			#endif
-			break;
+			case 4:
+#ifdef SCALE2X_UPSCALER
+				if (view.w * 2 <= scale2x_buf->w && view.h * 2 <= scale2x_buf->h)
+				{
+					scale2x((uint16_t *)sms_bitmap->pixels + view.y * view.pitch_pixels + view.x,
+					        (uint16_t *)scale2x_buf->pixels,
+					        sms_bitmap->pitch,
+					        scale2x_buf->pitch,
+					        view.w, view.h);
+					multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w * 2, view.h * 2);
+					bitmap_scale(0, 0, view.w * 2, view.h * 2, dst.w, dst.h,
+					             scale2x_buf->pitch >> 1, sdl_screen->w - dst.w,
+					             (uint16_t * restrict)scale2x_buf->pixels,
+					             (uint16_t * restrict)sdl_screen->pixels + dst.x + dst.y * sdl_screen->w);
+					SDL_UnlockSurface(sdl_screen);
+					SDL_Flip(sdl_screen);
+					return;
+				}
+#endif
+				multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w, view.h);
+				break;
 		}
+		bitmap_scale(view.x, view.y, view.w, view.h, dst.w, dst.h,
+		             view.pitch_pixels, sdl_screen->w - dst.w,
+		             (uint16_t * restrict)sms_bitmap->pixels,
+		             (uint16_t * restrict)sdl_screen->pixels + dst.x + dst.y * sdl_screen->w);
 		SDL_UnlockSurface(sdl_screen);
 	}
-		
 	SDL_Flip(sdl_screen);
-#ifdef NONBLOCKING_AUDIO
-	if(real_FPS > SDL_GetTicks()-start) usleep((real_FPS-(SDL_GetTicks()-start))*1000);
-#endif
 }
 
 void smsp_state(uint8_t slot_number, uint8_t mode)
 {
-	smsplus_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
+	multirexz80_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
 }
 
 void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
 {
 	(void)slot_number;
-	smsplus_sdl12_sram_file(gdata.sramfile, sram, mode);
+	multirexz80_sdl12_sram_file(gdata.sramfile, sram, mode);
 }
 
 static uint32_t sdl_controls_update_input(SDLKey k, int32_t p)
 {
-	smsplus_sdl12_keymap_t map;
-	smsplus_sdl12_keymap_from_config(&map, option.config_buttons);
-	return smsplus_sdl12_update_key(k, p, &map, &selectpressed);
+	multirexz80_sdl12_keymap_t map;
+	multirexz80_sdl12_keymap_from_config(&map, option.config_buttons);
+	return multirexz80_sdl12_update_key(k, p, &map, &selectpressed);
 }
+
 
 
 static void bios_init()
@@ -150,7 +149,7 @@ static void bios_init()
 		fseek(fd, 0, SEEK_SET);
 		if (size < 0x4000) size = 0x4000;
 		fread(bios.rom, size, 1, fd);
-		bios.enabled = 2;
+		bios.enabled = 2;  
 		bios.pages = size / 0x4000;
 		fclose(fd);
 	}
@@ -164,28 +163,13 @@ static void bios_init()
 		fread(coleco.rom, 0x2000, 1, fd);
 		fclose(fd);
 	}
-	
-	snprintf(bios_path, sizeof(bios_path), "%s%s", gdata.biosdir, "BIOS_sordm5.bin");
-	
-	fd = fopen(bios_path, "rb");
-	if(!fd)
-	{
-		/* Developer/test-tree fallback used by the bundled Sord M5 BIOS. */
-		fd = fopen("sordm5bios.bin", "rb");
-	}
-	if(fd)
-	{
-		/* Seek to end of file, and get size */
-		fread(coleco.rom, 0x2000, 1, fd);
-		fclose(fd);
-	}
 }
+
 
 static void smsp_gamedata_set(char *filename) 
 {
-	unsigned long i;
 	// Set paths, create directories
-	snprintf(home_path, sizeof(home_path), "%s/.smsplus/", getenv("HOME"));
+	snprintf(home_path, sizeof(home_path), "%s/.multirexz80/", getenv("HOME"));
 	
 	if (mkdir(home_path, 0755) && errno != EEXIST) {
 		fprintf(stderr, "Failed to create %s: %d\n", home_path, errno);
@@ -195,7 +179,7 @@ static void smsp_gamedata_set(char *filename)
 	snprintf(gdata.gamename, sizeof(gdata.gamename), "%s", basename(filename));
 	
 	// Strip the file extension off
-	for (i = strlen(gdata.gamename) - 1; i > 0; i--) {
+	for (unsigned long i = strlen(gdata.gamename) - 1; i > 0; i--) {
 		if (gdata.gamename[i] == '.') {
 			gdata.gamename[i] = '\0';
 			break;
@@ -242,13 +226,15 @@ void Menu()
     SDL_Event Event;
     
     SDL_Surface* miniscreen = SDL_CreateRGBSurface(SDL_SWSURFACE, miniscreenwidth, miniscreenheight, 16, sdl_screen->format->Rmask, sdl_screen->format->Gmask, sdl_screen->format->Bmask, sdl_screen->format->Amask);
-
     SDL_LockSurface(miniscreen);
-    if(IS_GG)
-        bitmap_scale(48,0,160,144,miniscreenwidth,miniscreenheight,256,0,(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)miniscreen->pixels);
-    else
-        bitmap_scale(0,0,256,192,miniscreenwidth,miniscreenheight,256,0,(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)miniscreen->pixels);
-        
+    {
+        multirexz80_sdl12_view_t view;
+        multirexz80_sdl12_get_active_view(&view);
+        bitmap_scale(view.x, view.y, view.w, view.h, miniscreenwidth, miniscreenheight,
+                     view.pitch_pixels, 0,
+                     (uint16_t* restrict)sms_bitmap->pixels,
+                     (uint16_t* restrict)miniscreen->pixels);
+    }
     SDL_UnlockSurface(miniscreen);
     
 	Sound_Pause();
@@ -317,8 +303,8 @@ void Menu()
 		if (currentselection == 6) print_string("Quit", TextRed, 0, 5, 145, sdl_screen->pixels);
 		else print_string("Quit", TextWhite, 0, 5, 145, sdl_screen->pixels);
 		
-		print_string("Based on SMS Plus by Charles Mcdonald", TextWhite, 0, 5, 175, sdl_screen->pixels);
-		print_string("Fork of SMS Plus GX by gameblabla", TextWhite, 0, 5, 190, sdl_screen->pixels);
+		print_string("Based on SMS Plus GX / SMS Plus", TextWhite, 0, 5, 175, sdl_screen->pixels);
+		print_string("Fork of MultiRexZ80 by gameblabla", TextWhite, 0, 5, 190, sdl_screen->pixels);
 		print_string("Scaler : Alekmaul", TextWhite, 0, 5, 205, sdl_screen->pixels);
 		print_string("Text drawing : n2DLib", TextWhite, 0, 5, 220, sdl_screen->pixels);
 
@@ -339,6 +325,8 @@ void Menu()
                             currentselection = 1;
                         break;
                     case SDLK_LCTRL:
+                    case SDLK_q:
+                    case SDLK_e:
                     case SDLK_LALT:
                     case SDLK_RETURN:
                         pressed = 1;
@@ -438,7 +426,6 @@ void Menu()
 		Sound_Unpause();
 }
 
-
 static void config_load()
 {
 	char config_path[256];
@@ -467,21 +454,16 @@ static void config_save()
 	}
 }
 
-
 static void Cleanup(void)
 {
 #ifdef SCALE2X_UPSCALER
 	if (scale2x_buf) SDL_FreeSurface(scale2x_buf);
-	scale2x_buf = NULL;
 #endif
 	if (sdl_screen) SDL_FreeSurface(sdl_screen);
-	sdl_screen = NULL;
-	
+	if (backbuffer) SDL_FreeSurface(backbuffer);
 	if (sms_bitmap) SDL_FreeSurface(sms_bitmap);
-	sms_bitmap = NULL;
 	
 	if (bios.rom) free(bios.rom);
-	bios.rom = NULL;
 	
 	// Deinitialize audio and video output
 	Sound_Close();
@@ -496,13 +478,11 @@ static void Cleanup(void)
 int main (int argc, char *argv[]) 
 {
 	SDL_Event event;
-	// Print Header
-	fprintf(stdout, "%s %s\n", APP_NAME, APP_VERSION);
 	
 	if(argc < 2) 
 	{
-		fprintf(stderr, "Usage: ./smsplus [FILE]\n");
-		exit(1);
+		fprintf(stderr, "Usage: ./multirexz80 [FILE]\n");
+		return 0;
 	}
 	
 	smsp_gamedata_set(argv[1]);
@@ -513,28 +493,25 @@ int main (int argc, char *argv[])
 	option.fm = 1;
 	option.spritelimit = 1;
 	option.tms_pal = 2;
+	option.console = 0;
 	option.nosound = 0;
 	option.soundlevel = 2;
 	
 	config_load();
 	
-	option.country = 0;
+	if (option.fullscreen < 0 && option.fullscreen > 2) option.fullscreen = 1;
+	
 	option.console = 0;
 	
 	strcpy(option.game_name, argv[1]);
-
+	
 	// Force Colecovision mode if extension is .col
 	if (strcmp(strrchr(argv[1], '.'), ".col") == 0) option.console = 6;
 	// Sometimes Game Gear games are not properly detected, force them accordingly
 	else if (strcmp(strrchr(argv[1], '.'), ".gg") == 0) option.console = 3;
-	// Force M5
-	else if (strcmp(strrchr(argv[1], '.'), ".m5") == 0) option.console = 7;
 	
-	/* Make sure it's before load_rom as we need to handle the cornercase in Wanted and other FM incompatible games */
 	if (sms.console == CONSOLE_SMS || sms.console == CONSOLE_SMS2)
-	{ 
 		sms.use_fm = 1; 
-	}
 	
 	// Load ROM
 	if(!load_rom(argv[1])) {
@@ -543,28 +520,21 @@ int main (int argc, char *argv[])
 		return 0;
 	}
 	
-	strcpy(option.game_name, argv[1]);
-	
 	SDL_Init(SDL_INIT_VIDEO);
-	
-	sdl_screen = SDL_SetVideoMode(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, SDL_HWSURFACE | SDL_DOUBLEBUF);
-	if (!sdl_screen)
-	{
-		fprintf(stdout, "Could not create display, exiting\n");	
-		Cleanup();
-		return 0;
-	}
-	
-	sms_bitmap = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_WIDTH_SMS, 267, 16, 0, 0, 0, 0);
+	sdl_screen = SDL_SetVideoMode(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, SDL_HWSURFACE| SDL_DOUBLEBUF
+	);
+	sms_bitmap = SDL_CreateRGBSurface(SDL_SWSURFACE, multirexz80_sdl12_bitmap_width(), multirexz80_sdl12_bitmap_height(), 16, 0, 0, 0, 0);
+	backbuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, 0, 0, 0, 0);
+	SDL_ShowCursor(0);
+
 #ifdef SCALE2X_UPSCALER
-	scale2x_buf = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_WIDTH_SMS*2, 480, 16, 0, 0, 0, 0);
+	scale2x_buf = SDL_CreateRGBSurface(SDL_SWSURFACE, multirexz80_sdl12_bitmap_width()*2, multirexz80_sdl12_bitmap_height()*2, 16, 0, 0, 0, 0);
 #endif
-	SDL_WM_SetCaption("SMS Plus GX", NULL);
 	
 	fprintf(stdout, "CRC : %08X\n", cart.crc);
 	
 	// Set parameters for internal bitmap
-	bitmap.width = VIDEO_WIDTH_SMS;
+	bitmap.width = sms_bitmap->w;
 	bitmap.height = sms_bitmap->h;
 	bitmap.depth = 16;
 	bitmap.data = (uint8_t *)sms_bitmap->pixels;
@@ -575,25 +545,28 @@ int main (int argc, char *argv[])
 	bitmap.viewport.y = 0x00;
 	
 	//sms.territory = settings.misc_region;
-	
+
 	bios_init();
 
 	// Initialize all systems and power on
 	system_poweron();
-
+	
 	Sound_Init();
-	
-	if (sms.display == DISPLAY_PAL) real_FPS = 1000 / 49.701459;
-	else real_FPS = 1000 / 59.922743;
-	
-	printf("sms.display %d, PAL is %d\n", sms.display, DISPLAY_PAL);
 	
 	// Loop until the user closes the window
 	while (!quit) 
 	{
-#ifdef NONBLOCKING_AUDIO
-		start = SDL_GetTicks();
-#endif
+		multirexz80_sdl12_frame_update();
+
+		// Execute frame(s)
+		system_frame(0);
+		
+		// Refresh sound data
+		Sound_Update(snd.output, snd.sample_count);
+		
+		// Refresh video data
+		video_update();
+
 		if (selectpressed == 1)
 		{
             Menu();
@@ -601,8 +574,8 @@ int main (int argc, char *argv[])
             input.system &= (IS_GG) ? ~INPUT_START : ~INPUT_PAUSE;
             selectpressed = 0;
 		}
-
-		if(SDL_PollEvent(&event)) 
+		
+		if (SDL_PollEvent(&event)) 
 		{
 			switch(event.type) 
 			{
@@ -617,17 +590,6 @@ int main (int argc, char *argv[])
 				break;
 			}
 		}
-		
-		smsplus_sdl12_frame_update();
-
-		// Execute frame(s)
-		system_frame(0);
-		
-		// Refresh sound data
-		Sound_Update(snd.output, snd.sample_count);
-		
-		// Refresh video data
-		video_update();
 	}
 	
 	config_save();

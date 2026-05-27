@@ -1,11 +1,22 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 #include "shared.h"
 #include "inspect.h"
 
-#ifdef SMSPLUS_HEADLESS
+#ifdef MULTIREXZ80_HEADLESS
 static FILE *trace_fp;
 static uint64_t trace_frame;
 
-void smsplus_inspect_set_trace(FILE *fp)
+void multirexz80_inspect_set_trace(FILE *fp)
 {
     trace_fp = fp;
     if (trace_fp)
@@ -15,7 +26,7 @@ void smsplus_inspect_set_trace(FILE *fp)
     }
 }
 
-void smsplus_inspect_set_frame(uint64_t frame)
+void multirexz80_inspect_set_frame(uint64_t frame)
 {
     trace_frame = frame;
 }
@@ -48,12 +59,12 @@ static void trace_cpu_common(const char *type, uint64_t frame, const char *detai
             code);
 }
 
-void smsplus_inspect_cpu_frame(uint64_t frame)
+void multirexz80_inspect_cpu_frame(uint64_t frame)
 {
     trace_cpu_common("cpu_frame", frame, "end", 0, 0, 0, 0);
 }
 
-void smsplus_inspect_vdp_write(const char *chip, uint16_t port, uint8_t data,
+void multirexz80_inspect_vdp_write(const char *chip, uint16_t port, uint8_t data,
                                int32_t line, uint16_t addr, uint8_t code)
 {
     if (!trace_fp) return;
@@ -80,17 +91,17 @@ void smsplus_inspect_vdp_write(const char *chip, uint16_t port, uint8_t data,
             code);
 }
 
-void smsplus_inspect_psg_write(uint16_t port, uint8_t data)
+void multirexz80_inspect_psg_write(uint16_t port, uint8_t data)
 {
     trace_cpu_common("psg_write", trace_frame, "sn76489", port, 0, data, 0);
 }
 
-void smsplus_inspect_ym_write(uint16_t port, uint8_t data)
+void multirexz80_inspect_ym_write(uint16_t port, uint8_t data)
 {
     trace_cpu_common("ym_write", trace_frame, "ym2413", port, 0, data, 0);
 }
 
-void smsplus_inspect_mem_write(uint16_t addr, uint8_t data)
+void multirexz80_inspect_mem_write(uint16_t addr, uint8_t data)
 {
     trace_cpu_common("mem_write", trace_frame, "z80", 0, addr, data, 0);
 }

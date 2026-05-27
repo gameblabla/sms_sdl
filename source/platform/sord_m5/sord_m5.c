@@ -1,5 +1,16 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
- * Sord M5 I/O and lightweight CTC model for SMS Plus GX.
+ * Sord M5 I/O and lightweight CTC model for MultiRexZ80.
  *
  * This follows MAME's src/mame/sord/m5.cpp hardware mapping and behavior, but
  * remains an independent reduced implementation.
@@ -250,7 +261,7 @@ static uint8_t sordm5_keyboard_r(uint8_t row)
 
 	/*
 	 * Compatibility bridge for frontends that only know about gamepad-style
-	 * SMS Plus GX input.  New frontends should drive input.m5_key[] directly
+	 * MultiRexZ80 input.  New frontends should drive input.m5_key[] directly
 	 * so full M5 keyboard state is available to software.
 	 */
 	switch(r)

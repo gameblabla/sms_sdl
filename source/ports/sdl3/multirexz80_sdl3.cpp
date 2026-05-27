@@ -1,4 +1,16 @@
-// SDL3 + Dear ImGui frontend for SMS Plus GX.
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+// SDL3 + Dear ImGui frontend for MultiRexZ80.
+// Frontend/shell integration code for this port is MultiRexZ80 project code.
 // This port is intentionally separate from the old SDL 1.2 frontend and the
 // headless runner.  It drives the Sord M5 keyboard matrix directly while still
 // exposing normal gamepad-style controls for SMS/GG/SG/Coleco games.
@@ -22,6 +34,8 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -40,6 +54,9 @@ extern "C" {
 #endif
 #ifndef SDL_SCANCODE_F8
 #define SDL_SCANCODE_F8 ((SDL_Scancode)65)
+#endif
+#ifndef SDL_SCANCODE_F11
+#define SDL_SCANCODE_F11 ((SDL_Scancode)68)
 #endif
 #ifndef SDL_GAMEPAD_BUTTON_INVALID
 #define SDL_GAMEPAD_BUTTON_INVALID ((SDL_GamepadButton)-1)
@@ -92,6 +109,10 @@ extern "C" {
 #endif
 
 extern "C" { t_config option; }
+
+static constexpr const char *MULTIREXZ80_SDL3_WINDOW_TITLE = "MultiRexZ80";
+static constexpr const char *MULTIREXZ80_SDL3_MENU_TITLE = "MultiRexZ80 SDL3";
+static constexpr Uint64 MENU_HINT_DURATION_NS = 3ull * 1000ull * 1000ull * 1000ull;
 
 static void *g_pixels = nullptr;
 static std::string g_sram_path;
@@ -256,6 +277,17 @@ struct RewindSnapshot
 {
     uint64_t frame = 0;
     std::vector<uint8_t> data;
+    /* Full active-resolution preview in XRGB8888.  This is deliberately not a
+     * thumbnail: during rewind playback it is drawn through the same SDL
+     * texture/source-rect/destination-rect path as the live game frame, so
+     * the image does not resize, recenter, or jump while scrubbing. */
+    std::vector<uint32_t> preview_pixels;
+    int preview_w = 0;
+    int preview_h = 0;
+    int preview_view_x = 0;
+    int preview_view_y = 0;
+    int preview_view_w = 0;
+    int preview_view_h = 0;
 };
 
 struct AppState
@@ -301,6 +333,17 @@ struct AppState
     int rewind_display_counter = 0;
     size_t rewind_max_snapshots = 900;
     std::vector<RewindSnapshot> rewind_snapshots;
+    std::vector<uint32_t> rewind_preview_pixels;
+    int rewind_preview_w = 0;
+    int rewind_preview_h = 0;
+    int rewind_preview_view_x = 0;
+    int rewind_preview_view_y = 0;
+    int rewind_preview_view_w = 0;
+    int rewind_preview_view_h = 0;
+    SDL_Texture *rewind_thumb_texture = nullptr;
+    uint64_t rewind_thumb_frame = UINT64_MAX;
+    int rewind_thumb_w = 0;
+    int rewind_thumb_h = 0;
     std::filesystem::path state_dir;
     std::filesystem::path save_dir;
     std::filesystem::path config_dir;
@@ -308,8 +351,197 @@ struct AppState
     std::filesystem::path state_thumb_path;
     int state_thumb_w = 0;
     int state_thumb_h = 0;
-    int menu_hint_frames = 0;
+    Uint64 menu_hint_until_ns = 0;
+    bool vsync = true;
+    bool frame_limit = true;
+    /* Queue limiting keeps SDL3 from building unlimited latency if the host runs
+     * ahead, but it must never clear the whole stream during normal playback.  The
+     * old clear-on-overflow path caused deterministic audible gaps in Psycho Soldier
+     * attract mode when queued audio briefly crossed the threshold. */
+    bool audio_drop_stale = true;
+    int audio_latency_frames = 8;
+    int audio_device_sample_frames = 768;
+    uint64_t audio_drop_count = 0;
+    uint64_t audio_backpressure_count = 0;
+    std::string audio_dump_path;
+    std::FILE *audio_dump_file = nullptr;
+    uint32_t audio_dump_bytes = 0;
+    int run_seconds = 0;
+    Uint64 next_frame_ns = 0;
 };
+
+static void sdl3_update_window_title(AppState &app)
+{
+    if (!app.window) return;
+    if (app.rom_loaded && !app.rom_path.empty())
+    {
+        std::filesystem::path rp(app.rom_path);
+        std::string title = std::string(MULTIREXZ80_SDL3_WINDOW_TITLE) + " - " + rp.filename().string();
+        SDL_SetWindowTitle(app.window, title.c_str());
+    }
+    else
+    {
+        SDL_SetWindowTitle(app.window, MULTIREXZ80_SDL3_WINDOW_TITLE);
+    }
+}
+
+static void sdl3_set_fullscreen(AppState &app, bool enabled)
+{
+    app.ui.fullscreen = enabled;
+    if (app.window)
+        SDL_SetWindowFullscreen(app.window, enabled);
+}
+
+static int sdl3_audio_frame_bytes()
+{
+    if (snd.sample_count <= 0) return 0;
+    return snd.sample_count * 2 * static_cast<int>(sizeof(int16_t));
+}
+
+static void wav_write_u16(std::FILE *f, uint16_t v)
+{
+    std::fputc(v & 0xff, f);
+    std::fputc((v >> 8) & 0xff, f);
+}
+
+static void wav_write_u32(std::FILE *f, uint32_t v)
+{
+    wav_write_u16(f, static_cast<uint16_t>(v & 0xffff));
+    wav_write_u16(f, static_cast<uint16_t>(v >> 16));
+}
+
+static bool sdl3_audio_dump_open(AppState &app)
+{
+    if (app.audio_dump_path.empty() || app.audio_dump_file) return true;
+
+    app.audio_dump_file = std::fopen(app.audio_dump_path.c_str(), "wb");
+    if (!app.audio_dump_file)
+    {
+        std::fprintf(stderr, "Unable to open audio dump '%s': %s\n", app.audio_dump_path.c_str(), std::strerror(errno));
+        return false;
+    }
+
+    std::fwrite("RIFF", 1, 4, app.audio_dump_file);
+    wav_write_u32(app.audio_dump_file, 0);
+    std::fwrite("WAVEfmt ", 1, 8, app.audio_dump_file);
+    wav_write_u32(app.audio_dump_file, 16);
+    wav_write_u16(app.audio_dump_file, 1);
+    wav_write_u16(app.audio_dump_file, 2);
+    wav_write_u32(app.audio_dump_file, SOUND_FREQUENCY);
+    wav_write_u32(app.audio_dump_file, SOUND_FREQUENCY * 2u * static_cast<uint32_t>(sizeof(int16_t)));
+    wav_write_u16(app.audio_dump_file, 2u * static_cast<uint16_t>(sizeof(int16_t)));
+    wav_write_u16(app.audio_dump_file, 16);
+    std::fwrite("data", 1, 4, app.audio_dump_file);
+    wav_write_u32(app.audio_dump_file, 0);
+    app.audio_dump_bytes = 0;
+    return true;
+}
+
+static void sdl3_audio_dump_frame(AppState &app, const void *data, int bytes)
+{
+    if (!app.audio_dump_file || !data || bytes <= 0) return;
+    const size_t wrote = std::fwrite(data, 1, static_cast<size_t>(bytes), app.audio_dump_file);
+    app.audio_dump_bytes += static_cast<uint32_t>(wrote);
+}
+
+static void sdl3_audio_dump_close(AppState &app)
+{
+    if (!app.audio_dump_file) return;
+    const uint32_t riff_size = 36u + app.audio_dump_bytes;
+    std::fseek(app.audio_dump_file, 4, SEEK_SET);
+    wav_write_u32(app.audio_dump_file, riff_size);
+    std::fseek(app.audio_dump_file, 40, SEEK_SET);
+    wav_write_u32(app.audio_dump_file, app.audio_dump_bytes);
+    std::fclose(app.audio_dump_file);
+    app.audio_dump_file = nullptr;
+}
+
+static void sdl3_clear_audio_queue(AppState &app)
+{
+    if (app.audio_stream)
+        SDL_ClearAudioStream(app.audio_stream);
+}
+
+static void sdl3_queue_audio_frame(AppState &app)
+{
+    if (!snd.output || snd.sample_count <= 0) return;
+
+    const int bytes = sdl3_audio_frame_bytes();
+    if (bytes <= 0) return;
+
+    if (!app.ui.audio || !app.audio_stream)
+    {
+        sdl3_audio_dump_frame(app, snd.output, bytes);
+        return;
+    }
+
+    if (app.audio_drop_stale)
+    {
+        int queued = SDL_GetAudioStreamQueued(app.audio_stream);
+        const int max_queued = bytes * std::max(1, app.audio_latency_frames);
+        if (queued >= max_queued)
+        {
+            const Uint64 start = SDL_GetTicksNS();
+            const Uint64 max_wait_ns = 20ull * 1000ull * 1000ull;
+            const int target_queued = std::max(0, max_queued - bytes);
+            app.audio_backpressure_count++;
+            do
+            {
+                SDL_Delay(1);
+                queued = SDL_GetAudioStreamQueued(app.audio_stream);
+            } while (queued > target_queued && SDL_GetTicksNS() - start < max_wait_ns);
+
+            if (queued >= max_queued * 2)
+            {
+                app.audio_drop_count++;
+                return;
+            }
+        }
+    }
+
+    sdl3_audio_dump_frame(app, snd.output, bytes);
+    SDL_PutAudioStreamData(app.audio_stream, snd.output, bytes);
+}
+
+static void sdl3_apply_vsync(AppState &app)
+{
+    if (!app.renderer) return;
+    SDL_SetRenderVSync(app.renderer, app.vsync ? 1 : 0);
+    app.next_frame_ns = 0;
+}
+
+static int sdl3_current_fps()
+{
+    if (sms.display == DISPLAY_PAL) return FPS_PAL;
+    return FPS_NTSC;
+}
+
+static void sdl3_pace_frame(AppState &app)
+{
+    if (!app.frame_limit || !app.rom_loaded || app.paused)
+    {
+        app.next_frame_ns = 0;
+        return;
+    }
+
+    const int fps = std::max(1, sdl3_current_fps());
+    const Uint64 frame_ns = 1000000000ull / static_cast<Uint64>(fps);
+    const Uint64 now = SDL_GetTicksNS();
+    if (app.next_frame_ns == 0)
+    {
+        app.next_frame_ns = now + frame_ns;
+        return;
+    }
+
+    if (now < app.next_frame_ns)
+        SDL_DelayNS(app.next_frame_ns - now);
+
+    const Uint64 after = SDL_GetTicksNS();
+    if (after > app.next_frame_ns + frame_ns * 4)
+        app.next_frame_ns = after + frame_ns;
+    else
+        app.next_frame_ns += frame_ns;
+}
 
 static void set_defaults()
 {
@@ -325,6 +557,23 @@ static void set_defaults()
     option.lcd_persistence = 1;
     option.lightgun_cursor = 1;
     option.lightgun_dpad_speed = 3;
+    
+    // To turn back on later if it does sound better
+    
+    option.audio_dc_blocker = 0;
+    option.audio_highpass_hz = 220;
+    option.audio_lowpass_hz = 5000;
+    option.audio_limiter = 0;
+    option.audio_headroom_db = 0;
+}
+
+static void normalize_audio_options()
+{
+    option.audio_dc_blocker = option.audio_dc_blocker ? 1 : 0;
+    option.audio_highpass_hz = std::clamp(option.audio_highpass_hz, 0, 20000);
+    option.audio_lowpass_hz = std::clamp(option.audio_lowpass_hz, 0, 20000);
+    option.audio_limiter = option.audio_limiter ? 1 : 0;
+    option.audio_headroom_db = std::clamp(option.audio_headroom_db, 0, 9);
 }
 
 static const char *ext_of(const std::string &path)
@@ -333,23 +582,128 @@ static const char *ext_of(const std::string &path)
     return dot ? dot : "";
 }
 
-static std::filesystem::path user_smsplus_dir()
+static std::filesystem::path user_multirexz80_dir()
 {
-#ifdef SMSPLUS_PORTABLE
+#ifdef MULTIREXZ80_PORTABLE
     return std::filesystem::current_path();
 #else
     const char *home = std::getenv("HOME");
-    if (home && home[0]) return std::filesystem::path(home) / ".smsplus";
-    return std::filesystem::current_path() / ".smsplus";
+    if (home && home[0]) return std::filesystem::path(home) / ".multirexz80";
+    return std::filesystem::current_path() / ".multirexz80";
 #endif
 }
 
 static void init_user_paths(AppState &app)
 {
-    std::filesystem::path root = user_smsplus_dir();
+    std::filesystem::path root = user_multirexz80_dir();
     app.config_dir = root;
     app.state_dir = root / "states";
     app.save_dir = root / "saves";
+}
+
+static std::filesystem::path sdl3_config_path(const AppState &app)
+{
+    return app.config_dir / "sdl3.cfg";
+}
+
+static bool parse_bool_value(const std::string &value, bool fallback)
+{
+    if (value == "1" || value == "true" || value == "yes" || value == "on") return true;
+    if (value == "0" || value == "false" || value == "no" || value == "off") return false;
+    return fallback;
+}
+
+static int parse_clamped_int_value(const std::string &value, int fallback, int lo, int hi)
+{
+    char *end = nullptr;
+    long v = std::strtol(value.c_str(), &end, 10);
+    if (end == value.c_str() || (end && *end)) return fallback;
+    return std::clamp(static_cast<int>(v), lo, hi);
+}
+
+static void load_sdl3_config(AppState &app)
+{
+    std::ifstream in(sdl3_config_path(app));
+    if (!in) return;
+
+    std::string line;
+    int audio_config_version = 0;
+    while (std::getline(in, line))
+    {
+        if (line.empty() || line[0] == '#') continue;
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string value = line.substr(eq + 1);
+        key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char c){ return std::isspace(c); }), key.end());
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char c){ return !std::isspace(c); }));
+        value.erase(std::find_if(value.rbegin(), value.rend(), [](unsigned char c){ return !std::isspace(c); }).base(), value.end());
+
+        if (key == "fullscreen") app.ui.fullscreen = parse_bool_value(value, app.ui.fullscreen);
+        else if (key == "keep_aspect") app.ui.keep_aspect = parse_bool_value(value, app.ui.keep_aspect);
+        else if (key == "stretch") app.ui.stretch = parse_bool_value(value, app.ui.stretch);
+        else if (key == "pixel_perfect") app.ui.pixel_perfect = parse_bool_value(value, app.ui.pixel_perfect);
+        else if (key == "linear_filter") app.ui.linear_filter = parse_bool_value(value, app.ui.linear_filter);
+        else if (key == "rewind_enabled") app.rewind_enabled = parse_bool_value(value, app.rewind_enabled);
+        else if (key == "rewind_interval_frames") app.rewind_interval_frames = parse_clamped_int_value(value, app.rewind_interval_frames, 1, 600);
+        else if (key == "rewind_step_display_frames") app.rewind_step_display_frames = parse_clamped_int_value(value, app.rewind_step_display_frames, 1, 60);
+        else if (key == "rewind_max_snapshots") app.rewind_max_snapshots = static_cast<size_t>(parse_clamped_int_value(value, static_cast<int>(app.rewind_max_snapshots), 1, 7200));
+        else if (key == "autosave_enabled") app.autosave_enabled = parse_bool_value(value, app.autosave_enabled);
+        else if (key == "autosave_interval_frames") app.autosave_interval_frames = parse_clamped_int_value(value, app.autosave_interval_frames, 60, 36000);
+        else if (key == "vsync") app.vsync = parse_bool_value(value, app.vsync);
+        else if (key == "frame_limit") app.frame_limit = parse_bool_value(value, app.frame_limit);
+        else if (key == "frame_limit_when_vsync_off") app.frame_limit = parse_bool_value(value, app.frame_limit);
+        else if (key == "audio_drop_stale") app.audio_drop_stale = parse_bool_value(value, app.audio_drop_stale);
+        else if (key == "audio_latency_frames") app.audio_latency_frames = parse_clamped_int_value(value, app.audio_latency_frames, 1, 12);
+        else if (key == "audio_device_sample_frames") app.audio_device_sample_frames = parse_clamped_int_value(value, app.audio_device_sample_frames, 64, 4096);
+        else if (key == "audio_config_version") audio_config_version = parse_clamped_int_value(value, audio_config_version, 0, 999);
+        else if (key == "audio_dc_blocker") option.audio_dc_blocker = parse_bool_value(value, option.audio_dc_blocker) ? 1 : 0;
+        else if (key == "audio_highpass_hz") option.audio_highpass_hz = parse_clamped_int_value(value, option.audio_highpass_hz, 0, 20000);
+        else if (key == "audio_lowpass_hz") option.audio_lowpass_hz = parse_clamped_int_value(value, option.audio_lowpass_hz, 0, 20000);
+        else if (key == "audio_limiter") option.audio_limiter = parse_bool_value(value, option.audio_limiter) ? 1 : 0;
+        else if (key == "audio_headroom_db") option.audio_headroom_db = parse_clamped_int_value(value, option.audio_headroom_db, 0, 9);
+    }
+
+    if (audio_config_version < 5)
+    {
+        option.audio_dc_blocker = 1;
+        option.audio_highpass_hz = 220;
+        option.audio_lowpass_hz = 5000;
+        option.audio_limiter = 1;
+        option.audio_headroom_db = 0;
+    }
+}
+
+static void save_sdl3_config(const AppState &app)
+{
+    normalize_audio_options();
+    std::error_code ec;
+    std::filesystem::create_directories(app.config_dir, ec);
+    std::ofstream out(sdl3_config_path(app), std::ios::trunc);
+    if (!out) return;
+    out << "# MultiRexZ80 SDL3 settings\n";
+    out << "fullscreen=" << (app.ui.fullscreen ? 1 : 0) << "\n";
+    out << "keep_aspect=" << (app.ui.keep_aspect ? 1 : 0) << "\n";
+    out << "stretch=" << (app.ui.stretch ? 1 : 0) << "\n";
+    out << "pixel_perfect=" << (app.ui.pixel_perfect ? 1 : 0) << "\n";
+    out << "linear_filter=" << (app.ui.linear_filter ? 1 : 0) << "\n";
+    out << "rewind_enabled=" << (app.rewind_enabled ? 1 : 0) << "\n";
+    out << "rewind_interval_frames=" << app.rewind_interval_frames << "\n";
+    out << "rewind_step_display_frames=" << app.rewind_step_display_frames << "\n";
+    out << "rewind_max_snapshots=" << app.rewind_max_snapshots << "\n";
+    out << "autosave_enabled=" << (app.autosave_enabled ? 1 : 0) << "\n";
+    out << "autosave_interval_frames=" << app.autosave_interval_frames << "\n";
+    out << "vsync=" << (app.vsync ? 1 : 0) << "\n";
+    out << "frame_limit=" << (app.frame_limit ? 1 : 0) << "\n";
+    out << "audio_drop_stale=" << (app.audio_drop_stale ? 1 : 0) << "\n";
+    out << "audio_latency_frames=" << app.audio_latency_frames << "\n";
+    out << "audio_device_sample_frames=" << app.audio_device_sample_frames << "\n";
+    out << "audio_config_version=5\n";
+    out << "audio_dc_blocker=" << (option.audio_dc_blocker ? 1 : 0) << "\n";
+    out << "audio_highpass_hz=" << option.audio_highpass_hz << "\n";
+    out << "audio_lowpass_hz=" << option.audio_lowpass_hz << "\n";
+    out << "audio_limiter=" << (option.audio_limiter ? 1 : 0) << "\n";
+    out << "audio_headroom_db=" << option.audio_headroom_db << "\n";
 }
 
 
@@ -431,9 +785,9 @@ static std::string find_local_bios(const std::string &rom_path,
     if (home && *home)
     {
         std::filesystem::path hp(home);
-        append_bios_candidates(candidates, hp / ".smsplus" / "bios", names);
-        append_bios_candidates(candidates, hp / ".smsplusgx" / "bios", names);
-        append_bios_candidates(candidates, hp / ".config" / "smsplusgx" / "bios", names);
+        append_bios_candidates(candidates, hp / ".multirexz80" / "bios", names);
+        append_bios_candidates(candidates, hp / ".multirexz80" / "bios", names);
+        append_bios_candidates(candidates, hp / ".config" / "multirexz80" / "bios", names);
     }
 
     for (const auto &candidate : candidates)
@@ -494,13 +848,13 @@ static bool init_bios(AppState &app)
 static bool init_bitmap()
 {
     if (!g_pixels)
-        g_pixels = std::calloc(static_cast<size_t>(BITMAP_W) * BITMAP_H, SMSPLUS_RENDER_BYTES_PER_PIXEL);
+        g_pixels = std::calloc(static_cast<size_t>(BITMAP_W) * BITMAP_H, MULTIREXZ80_RENDER_BYTES_PER_PIXEL);
     if (!g_pixels) return false;
     bitmap.width = BITMAP_W;
     bitmap.height = BITMAP_H;
-    bitmap.depth = SMSPLUS_RENDER_DEPTH;
+    bitmap.depth = MULTIREXZ80_RENDER_DEPTH;
     bitmap.data = reinterpret_cast<uint8_t *>(g_pixels);
-    bitmap.pitch = BITMAP_W * SMSPLUS_RENDER_BYTES_PER_PIXEL;
+    bitmap.pitch = BITMAP_W * MULTIREXZ80_RENDER_BYTES_PER_PIXEL;
     bitmap.viewport.w = VIDEO_WIDTH_SMS;
     bitmap.viewport.h = VIDEO_HEIGHT_SMS;
     bitmap.viewport.x = 0;
@@ -542,7 +896,7 @@ static std::filesystem::path autosave_path(const AppState &app)
     return app.state_dir / (sanitize_component(rp.stem().string()) + suffix);
 }
 
-#ifndef SMSPLUS_RENDER_32BPP
+#ifndef MULTIREXZ80_RENDER_32BPP
 static uint32_t rgb565_to_xrgb8888(uint16_t p)
 {
     uint32_t r = (p >> 11) & 0x1F;
@@ -574,7 +928,7 @@ static std::vector<uint32_t> capture_thumbnail(uint32_t &tw, uint32_t &th)
         for (uint32_t x = 0; x < tw; x++)
         {
             int sx = src_x0 + static_cast<int>((static_cast<uint64_t>(x) * active_w) / tw);
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
             uint32_t p = *reinterpret_cast<const uint32_t *>(src_line + sx * 4);
             thumb[static_cast<size_t>(y) * tw + x] = 0xFF000000u | (p & 0x00FFFFFFu);
 #else
@@ -584,6 +938,129 @@ static std::vector<uint32_t> capture_thumbnail(uint32_t &tw, uint32_t &th)
         }
     }
     return thumb;
+}
+
+static void clear_rewind_preview(AppState &app)
+{
+    app.rewind_preview_pixels.clear();
+    app.rewind_preview_w = 0;
+    app.rewind_preview_h = 0;
+    app.rewind_preview_view_x = 0;
+    app.rewind_preview_view_y = 0;
+    app.rewind_preview_view_w = 0;
+    app.rewind_preview_view_h = 0;
+}
+
+static void destroy_rewind_thumb_texture(AppState &app)
+{
+    if (app.rewind_thumb_texture)
+    {
+        SDL_DestroyTexture(app.rewind_thumb_texture);
+        app.rewind_thumb_texture = nullptr;
+    }
+    app.rewind_thumb_frame = UINT64_MAX;
+    app.rewind_thumb_w = 0;
+    app.rewind_thumb_h = 0;
+}
+
+static void clear_rewind_buffer(AppState &app)
+{
+    app.rewind_snapshots.clear();
+    app.last_rewind_capture_frame = 0;
+    app.rewind_display_counter = 0;
+    app.rewind_was_active = false;
+    app.rewind_hold = false;
+    app.rewind_ui_hold = false;
+    app.rewind_ui_hold_next = false;
+    clear_rewind_preview(app);
+    destroy_rewind_thumb_texture(app);
+}
+
+static void set_rewind_enabled(AppState &app, bool enabled)
+{
+    if (app.rewind_enabled == enabled) return;
+    app.rewind_enabled = enabled;
+    if (!enabled)
+    {
+        clear_rewind_buffer(app);
+        app.status = "Rewind disabled; snapshot history cleared.";
+    }
+    else
+    {
+        app.status = "Rewind enabled.";
+    }
+}
+
+static std::vector<uint32_t> capture_active_preview(int &preview_w, int &preview_h,
+                                                    int &view_x, int &view_y,
+                                                    int &view_w, int &view_h)
+{
+    int active_w = bitmap.viewport.w > 0 ? bitmap.viewport.w : 256;
+    int active_h = bitmap.viewport.h > 0 ? bitmap.viewport.h : vdp.height;
+    int src_x0 = std::max(0, bitmap.viewport.x);
+    int src_y0 = std::max(0, bitmap.viewport.y);
+
+    if (active_w <= 0) active_w = 256;
+    if (active_h <= 0) active_h = 192;
+
+    active_w = std::min(active_w, std::max(0, BITMAP_W - src_x0));
+    active_h = std::min(active_h, std::max(0, BITMAP_H - src_y0));
+    if (active_w <= 0 || active_h <= 0)
+    {
+        active_w = std::min(256, BITMAP_W);
+        active_h = std::min(192, BITMAP_H);
+        src_x0 = src_y0 = 0;
+    }
+
+    preview_w = active_w;
+    preview_h = active_h;
+    view_x = src_x0;
+    view_y = src_y0;
+    view_w = active_w;
+    view_h = active_h;
+
+    std::vector<uint32_t> preview(static_cast<size_t>(active_w) * active_h, 0xFF000000u);
+    for (int y = 0; y < active_h; y++)
+    {
+        const uint8_t *src_line = bitmap.data + static_cast<size_t>(src_y0 + y) * bitmap.pitch;
+        uint32_t *dst_line = preview.data() + static_cast<size_t>(y) * active_w;
+        for (int x = 0; x < active_w; x++)
+        {
+#ifdef MULTIREXZ80_RENDER_32BPP
+            uint32_t p = *reinterpret_cast<const uint32_t *>(src_line + static_cast<size_t>(src_x0 + x) * 4);
+            dst_line[x] = 0xFF000000u | (p & 0x00FFFFFFu);
+#else
+            uint16_t p = *reinterpret_cast<const uint16_t *>(src_line + static_cast<size_t>(src_x0 + x) * 2);
+            dst_line[x] = rgb565_to_xrgb8888(p);
+#endif
+        }
+    }
+    return preview;
+}
+
+static void capture_rewind_preview(RewindSnapshot &snap)
+{
+    snap.preview_pixels = capture_active_preview(snap.preview_w, snap.preview_h,
+                                                 snap.preview_view_x, snap.preview_view_y,
+                                                 snap.preview_view_w, snap.preview_view_h);
+}
+
+static void restore_rewind_preview(AppState &app, const RewindSnapshot &snap)
+{
+    if (!snap.preview_pixels.empty() && snap.preview_w > 0 && snap.preview_h > 0)
+    {
+        app.rewind_preview_pixels = snap.preview_pixels;
+        app.rewind_preview_w = snap.preview_w;
+        app.rewind_preview_h = snap.preview_h;
+        app.rewind_preview_view_x = snap.preview_view_x;
+        app.rewind_preview_view_y = snap.preview_view_y;
+        app.rewind_preview_view_w = snap.preview_view_w > 0 ? snap.preview_view_w : snap.preview_w;
+        app.rewind_preview_view_h = snap.preview_view_h > 0 ? snap.preview_view_h : snap.preview_h;
+    }
+    else
+    {
+        clear_rewind_preview(app);
+    }
 }
 
 static bool save_state_file(AppState &app, const std::filesystem::path &path)
@@ -627,6 +1104,8 @@ static bool load_state_file(AppState &app, const std::filesystem::path &path)
         return false;
     }
     app.status = "Loaded state: " + path.string();
+    sdl3_clear_audio_queue(app);
+    clear_rewind_preview(app);
     return true;
 }
 
@@ -682,7 +1161,9 @@ static void capture_rewind_snapshot(AppState &app)
     snap.frame = app.frame_counter;
     snap.data.assign(data, data + size);
     system_free_state_buffer(data);
+    capture_rewind_preview(snap);
     app.rewind_snapshots.push_back(std::move(snap));
+    destroy_rewind_thumb_texture(app);
     if (app.rewind_snapshots.size() > app.rewind_max_snapshots)
         app.rewind_snapshots.erase(app.rewind_snapshots.begin());
     app.last_rewind_capture_frame = app.frame_counter;
@@ -712,7 +1193,10 @@ static bool rewind_one_snapshot(AppState &app)
         if (system_load_state_buffer(snap.data.data(), static_cast<uint32_t>(snap.data.size())))
         {
             app.frame_counter = snap.frame;
-            render_loaded_state_preview_frame();
+            restore_rewind_preview(app, snap);
+            if (app.rewind_preview_pixels.empty())
+                render_loaded_state_preview_frame();
+            sdl3_clear_audio_queue(app);
             app.status = "Rewinding... frame " + std::to_string(static_cast<unsigned long long>(snap.frame));
             return true;
         }
@@ -732,6 +1216,7 @@ static void run_rewind(AppState &app)
         if (app.rewind_was_active)
         {
             app.rewind_display_counter = 0;
+            clear_rewind_preview(app);
             app.status = "Rewind released; resumed from frame " +
                          std::to_string(static_cast<unsigned long long>(app.frame_counter));
         }
@@ -775,7 +1260,7 @@ static void maybe_capture_rewind(AppState &app)
 
 extern "C" void smsp_state(uint8_t slot_number, uint8_t mode)
 {
-    std::filesystem::path dir = user_smsplus_dir() / "states";
+    std::filesystem::path dir = user_multirexz80_dir() / "states";
     std::filesystem::path path = state_path_for_slot(option.game_name, dir, slot_number);
     ensure_state_dir(dir);
     if (mode == 0)
@@ -843,6 +1328,7 @@ static bool load_game(AppState &app, const std::string &path)
         return false;
     }
     system_poweron();
+    sdl3_clear_audio_queue(app);
     app.ui.db_lightgun = (sms.device[0] == DEVICE_LIGHTGUN);
     if (app.ui.force_lightgun) sms.device[0] = DEVICE_LIGHTGUN;
     app.rom_path = path;
@@ -857,22 +1343,17 @@ static bool load_game(AppState &app, const std::string &path)
     app.rom_loaded = true;
     app.paused = false;
     app.ui.show_menu = false;
-    app.menu_hint_frames = 90;
+    app.menu_hint_until_ns = SDL_GetTicksNS() + MENU_HINT_DURATION_NS;
     app.frame_counter = 0;
     app.last_autosave_frame = 0;
-    app.last_rewind_capture_frame = 0;
-    app.rewind_hold = false;
-    app.rewind_ui_hold = false;
-    app.rewind_ui_hold_next = false;
-    app.rewind_was_active = false;
     app.arcade_ui_mask = 0;
     app.arcade_ui_mask_next = 0;
     input.arcade = 0;
-    app.rewind_display_counter = 0;
-    app.rewind_snapshots.clear();
+    clear_rewind_buffer(app);
     ensure_state_dir(app.state_dir);
     invalidate_state_thumbnail(app);
     app.status = "Loaded " + path;
+    sdl3_update_window_title(app);
     return true;
 }
 
@@ -1211,13 +1692,29 @@ static void parse_args(AppState &app, int argc, char **argv)
             }
         }
         else if (!std::strcmp(a, "--fullscreen")) app.ui.fullscreen = true;
+        else if (!std::strcmp(a, "--windowed") || !std::strcmp(a, "--no-fullscreen")) app.ui.fullscreen = false;
         else if (!std::strcmp(a, "--stretch")) { app.ui.stretch = true; app.ui.keep_aspect = false; app.ui.pixel_perfect = false; }
         else if (!std::strcmp(a, "--linear")) app.ui.linear_filter = true;
         else if (!std::strcmp(a, "--nearest") || !std::strcmp(a, "--pixel-perfect")) { app.ui.linear_filter = false; app.ui.pixel_perfect = true; }
         else if (!std::strcmp(a, "--lcd-persistence")) option.lcd_persistence = 1;
         else if (!std::strcmp(a, "--no-lcd-persistence")) option.lcd_persistence = 0;
         else if (!std::strcmp(a, "--no-audio")) app.ui.audio = false;
+        else if (!std::strcmp(a, "--audio-latency-frames")) { if (const char *v = need(a)) app.audio_latency_frames = std::clamp(std::atoi(v), 1, 12); }
+        else if (!std::strcmp(a, "--audio-device-sample-frames")) { if (const char *v = need(a)) app.audio_device_sample_frames = std::clamp(std::atoi(v), 64, 4096); }
+        else if (!std::strcmp(a, "--audio-highpass-hz")) { if (const char *v = need(a)) option.audio_highpass_hz = std::clamp(std::atoi(v), 0, 20000); }
+        else if (!std::strcmp(a, "--audio-lowpass-hz")) { if (const char *v = need(a)) option.audio_lowpass_hz = std::clamp(std::atoi(v), 0, 20000); }
+        else if (!std::strcmp(a, "--audio-headroom-db")) { if (const char *v = need(a)) option.audio_headroom_db = std::clamp(std::atoi(v), 0, 9); }
+        else if (!std::strcmp(a, "--audio-dump-wav")) { if (const char *v = need(a)) app.audio_dump_path = v; }
+        else if (!std::strcmp(a, "--run-seconds")) { if (const char *v = need(a)) app.run_seconds = std::max(1, std::atoi(v)); }
+        else if (!std::strcmp(a, "--no-audio-dc-blocker")) option.audio_dc_blocker = 0;
+        else if (!std::strcmp(a, "--no-audio-limiter")) option.audio_limiter = 0;
+        else if (!std::strcmp(a, "--no-audio-drop")) app.audio_drop_stale = false;
+        else if (!std::strcmp(a, "--vsync")) app.vsync = true;
+        else if (!std::strcmp(a, "--no-vsync")) app.vsync = false;
+        else if (!std::strcmp(a, "--frame-limit")) app.frame_limit = true;
+        else if (!std::strcmp(a, "--no-frame-limit")) app.frame_limit = false;
         else if (!std::strcmp(a, "--no-autosave")) app.autosave_enabled = false;
+        else if (!std::strcmp(a, "--rewind")) app.rewind_enabled = true;
         else if (!std::strcmp(a, "--no-rewind")) app.rewind_enabled = false;
         else if (!std::strcmp(a, "--rewind-interval")) { if (const char *v = need(a)) app.rewind_interval_frames = std::max(1, std::atoi(v)); }
         else if (!std::strcmp(a, "--rewind-steps")) { if (const char *v = need(a)) app.rewind_max_snapshots = static_cast<size_t>(std::max(1, std::atoi(v))); }
@@ -1227,6 +1724,26 @@ static void parse_args(AppState &app, int argc, char **argv)
         else if (!std::strcmp(a, "--no-lightgun-cursor")) { app.ui.show_lightgun_cursor = false; option.lightgun_cursor = 0; }
         else if (!std::strcmp(a, "--hide-menu")) app.ui.show_menu = false;
         else if (a[0] != '-') app.rom_path = a;
+    }
+}
+
+static int scaling_mode_index(const UiSettings &ui)
+{
+    return (ui.stretch || !ui.keep_aspect) ? 1 : 0;
+}
+
+static void set_scaling_mode(UiSettings &ui, int mode)
+{
+    if (mode == 0)
+    {
+        ui.keep_aspect = true;
+        ui.stretch = false;
+    }
+    else
+    {
+        ui.keep_aspect = false;
+        ui.stretch = true;
+        ui.pixel_perfect = false;
     }
 }
 
@@ -1263,18 +1780,40 @@ static void draw_lightgun_cursor_overlay(AppState &app, const SDL_FRect &dst, in
 static void render_core(AppState &app)
 {
     SDL_SetTextureScaleMode(app.texture, app.ui.linear_filter ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
-    SDL_UpdateTexture(app.texture, nullptr, bitmap.data, bitmap.pitch);
-    int win_w = 0, win_h = 0;
-    SDL_GetWindowSize(app.window, &win_w, &win_h);
     int active_w = bitmap.viewport.w > 0 ? bitmap.viewport.w : 256;
     int active_h = bitmap.viewport.h > 0 ? bitmap.viewport.h : vdp.height;
-    SDL_FRect src{static_cast<float>(std::max(0, bitmap.viewport.x)), 0.0f,
-                  static_cast<float>(active_w), static_cast<float>(active_h)};
+    SDL_FRect src{};
+
+    if (!app.rewind_preview_pixels.empty() && app.rewind_preview_w > 0 && app.rewind_preview_h > 0)
+    {
+        const int px = std::clamp(app.rewind_preview_view_x, 0, BITMAP_W - 1);
+        const int py = std::clamp(app.rewind_preview_view_y, 0, BITMAP_H - 1);
+        const int pw = std::min(app.rewind_preview_w, BITMAP_W - px);
+        const int ph = std::min(app.rewind_preview_h, BITMAP_H - py);
+        const int view_w = app.rewind_preview_view_w > 0 ? app.rewind_preview_view_w : pw;
+        const int view_h = app.rewind_preview_view_h > 0 ? app.rewind_preview_view_h : ph;
+        SDL_Rect update_rect{px, py, pw, ph};
+        SDL_UpdateTexture(app.texture, &update_rect, app.rewind_preview_pixels.data(), app.rewind_preview_w * static_cast<int>(sizeof(uint32_t)));
+        active_w = view_w;
+        active_h = view_h;
+        src = SDL_FRect{static_cast<float>(px), static_cast<float>(py),
+                        static_cast<float>(view_w), static_cast<float>(view_h)};
+    }
+    else
+    {
+        SDL_UpdateTexture(app.texture, nullptr, bitmap.data, bitmap.pitch);
+        src = SDL_FRect{static_cast<float>(std::max(0, bitmap.viewport.x)), static_cast<float>(std::max(0, bitmap.viewport.y)),
+                        static_cast<float>(active_w), static_cast<float>(active_h)};
+    }
+
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(app.window, &win_w, &win_h);
     SDL_FRect dst = compute_dest_rect(app.ui, active_w, active_h, win_w, win_h);
     SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 255);
     SDL_RenderClear(app.renderer);
     SDL_RenderTexture(app.renderer, app.texture, &src, &dst);
-    draw_lightgun_cursor_overlay(app, dst, active_w, active_h);
+    if (app.rewind_preview_pixels.empty())
+        draw_lightgun_cursor_overlay(app, dst, active_w, active_h);
 }
 
 static std::vector<std::filesystem::directory_entry> list_browser(const std::filesystem::path &dir)
@@ -1453,6 +1992,35 @@ static void draw_controller_controls(AppState &app)
                 (input.pad[lightgun_port()] & INPUT_BUTTON1) ? "down" : "up");
 }
 
+static bool update_rewind_thumb_texture(AppState &app)
+{
+    if (app.rewind_snapshots.empty())
+    {
+        destroy_rewind_thumb_texture(app);
+        return false;
+    }
+    const RewindSnapshot &snap = app.rewind_snapshots.back();
+    if (snap.preview_pixels.empty() || snap.preview_w <= 0 || snap.preview_h <= 0)
+    {
+        destroy_rewind_thumb_texture(app);
+        return false;
+    }
+    if (app.rewind_thumb_texture && app.rewind_thumb_frame == snap.frame &&
+        app.rewind_thumb_w == snap.preview_w && app.rewind_thumb_h == snap.preview_h)
+        return true;
+
+    destroy_rewind_thumb_texture(app);
+    SDL_Texture *tex = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, snap.preview_w, snap.preview_h);
+    if (!tex) return false;
+    SDL_UpdateTexture(tex, nullptr, snap.preview_pixels.data(), snap.preview_w * static_cast<int>(sizeof(uint32_t)));
+    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+    app.rewind_thumb_texture = tex;
+    app.rewind_thumb_frame = snap.frame;
+    app.rewind_thumb_w = snap.preview_w;
+    app.rewind_thumb_h = snap.preview_h;
+    return true;
+}
+
 static void draw_states(AppState &app)
 {
     ImGui::TextUnformatted("Save states");
@@ -1489,15 +2057,34 @@ static void draw_states(AppState &app)
     ImGui::SameLine();
     if (ImGui::Button("Autosave +")) app.autosave_interval_frames = std::min(3600, app.autosave_interval_frames + 60);
 
-    ImGui::Checkbox("Rewind", &app.rewind_enabled);
+    bool rewind = app.rewind_enabled;
+    if (ImGui::Checkbox("Rewind", &rewind))
+        set_rewind_enabled(app, rewind);
     ImGui::SameLine();
     ImGui::Text("snapshots: %d / %d", static_cast<int>(app.rewind_snapshots.size()), static_cast<int>(app.rewind_max_snapshots));
-    if (ImGui::Button("Hold to rewind", ImVec2(150, 0))) {}
-    if (ImGui::IsItemActive()) app.rewind_ui_hold_next = true;
-    ImGui::SameLine();
-    ImGui::Text("%s", rewind_active(app) ? "rewinding" : "ready");
-    ImGui::Text("Capture every %d emulated frames; playback step every %d display frames.",
-                app.rewind_interval_frames, app.rewind_step_display_frames);
+    if (!app.rewind_enabled)
+        ImGui::TextWrapped("Rewind is disabled. This avoids periodic state serialization and releases the rewind buffer memory.");
+    else
+    {
+        if (ImGui::Button("Hold to rewind", ImVec2(150, 0))) {}
+        if (ImGui::IsItemActive()) app.rewind_ui_hold_next = true;
+        ImGui::SameLine();
+        ImGui::Text("%s", rewind_active(app) ? "rewinding" : "ready");
+        ImGui::SameLine();
+        if (ImGui::Button("Clear rewind buffer")) clear_rewind_buffer(app);
+        ImGui::Text("Capture every %d emulated frames; playback step every %d display frames.",
+                    app.rewind_interval_frames, app.rewind_step_display_frames);
+        if (update_rewind_thumb_texture(app) && app.rewind_thumb_texture)
+        {
+            ImGui::Text("Newest rewind preview: frame %llu",
+                        static_cast<unsigned long long>(app.rewind_thumb_frame));
+            const float max_w = 160.0f;
+            const float scale = (app.rewind_thumb_w > 0) ? std::min(1.0f, max_w / static_cast<float>(app.rewind_thumb_w)) : 1.0f;
+            ImGui::Image((ImTextureID)app.rewind_thumb_texture,
+                         ImVec2(static_cast<float>(app.rewind_thumb_w) * scale,
+                                static_cast<float>(app.rewind_thumb_h) * scale));
+        }
+    }
     ImGui::TextWrapped("Hotkeys: F5 saves, F8 loads, hold F6 or the controller Rewind binding to scrub backward continuously. Release to resume from the selected point. State files are PNG images with an embedded compressed save-state chunk, so the thumbnail is visible outside the emulator too.");
 }
 
@@ -1528,7 +2115,7 @@ static void draw_virtual_keyboard(AppState &app)
 
 static void draw_menu_hint(AppState &app)
 {
-    if (!app.rom_loaded || app.ui.show_menu || app.menu_hint_frames <= 0) return;
+    if (!app.rom_loaded || app.ui.show_menu || app.menu_hint_until_ns == 0 || SDL_GetTicksNS() >= app.menu_hint_until_ns) return;
     ImDrawList *draw = ImGui::GetForegroundDrawList();
     const ImVec2 pos(10.0f, 8.0f);
     const char *text = "Press Escape for menu";
@@ -1541,21 +2128,26 @@ static void draw_menu(AppState &app)
     if (!app.ui.show_menu) return;
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(520, 620), ImGuiCond_FirstUseEver);
-    ImGui::Begin("SMS Plus GX SDL3", &app.ui.show_menu);
+    ImGui::Begin(MULTIREXZ80_SDL3_MENU_TITLE, &app.ui.show_menu);
     if (ImGui::BeginTabBar("tabs"))
     {
         if (ImGui::BeginTabItem("Games")) { draw_browser(app); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("States")) { draw_states(app); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Video"))
         {
-            ImGui::Checkbox("Keep aspect ratio", &app.ui.keep_aspect);
-            ImGui::Checkbox("Stretch", &app.ui.stretch);
+            static const char *scaling_modes[] = {"Keep aspect ratio", "Stretch to window"};
+            int scaling_mode = scaling_mode_index(app.ui);
+            if (ImGui::Combo("Scaling", &scaling_mode, scaling_modes, IM_ARRAYSIZE(scaling_modes)))
+                set_scaling_mode(app.ui, scaling_mode);
             ImGui::Checkbox("Pixel perfect", &app.ui.pixel_perfect);
             ImGui::Checkbox("Linear filtering", &app.ui.linear_filter);
+            if (ImGui::Checkbox("VSync", &app.vsync)) sdl3_apply_vsync(app);
+            ImGui::Checkbox("Frame limit", &app.frame_limit);
             bool lcd = option.lcd_persistence != 0;
             if (ImGui::Checkbox("Game Gear LCD persistence", &lcd)) option.lcd_persistence = lcd ? 1 : 0;
-            if (ImGui::Checkbox("Fullscreen", &app.ui.fullscreen))
-                SDL_SetWindowFullscreen(app.window, app.ui.fullscreen);
+            bool fullscreen = app.ui.fullscreen;
+            if (ImGui::Checkbox("Fullscreen (F11)", &fullscreen))
+                sdl3_set_fullscreen(app, fullscreen);
             ImGui::Text("Active viewport: %d x %d", bitmap.viewport.w, bitmap.viewport.h);
             ImGui::EndTabItem();
         }
@@ -1571,7 +2163,29 @@ static void draw_menu(AppState &app)
             ImGui::Text("Console: %u", sms.console);
             if (ImGui::Button(app.paused ? "Resume" : "Pause")) app.paused = !app.paused;
             ImGui::SameLine();
-            if (ImGui::Button("Reset") && app.rom_loaded) system_reset();
+            if (ImGui::Button("Reset") && app.rom_loaded) { system_reset(); sdl3_clear_audio_queue(app); }
+            ImGui::Separator();
+            ImGui::TextUnformatted("Latency");
+            if (ImGui::Checkbox("Audio", &app.ui.audio) && !app.ui.audio)
+                sdl3_clear_audio_queue(app);
+            ImGui::SameLine();
+            ImGui::Checkbox("Limit queued audio", &app.audio_drop_stale);
+            ImGui::SliderInt("Audio queue limit (frames)", &app.audio_latency_frames, 1, 12);
+            int queued_audio = app.audio_stream ? SDL_GetAudioStreamQueued(app.audio_stream) : 0;
+            ImGui::Text("SDL queued audio: %d bytes; waits: %llu; drops: %llu", queued_audio,
+                        static_cast<unsigned long long>(app.audio_backpressure_count),
+                        static_cast<unsigned long long>(app.audio_drop_count));
+            if (ImGui::Button("Clear queued audio")) sdl3_clear_audio_queue(app);
+            ImGui::Separator();
+            ImGui::TextUnformatted("Sound shaping");
+            bool dc_blocker = option.audio_dc_blocker != 0;
+            if (ImGui::Checkbox("DC blocker", &dc_blocker)) option.audio_dc_blocker = dc_blocker ? 1 : 0;
+            ImGui::SameLine();
+            bool limiter = option.audio_limiter != 0;
+            if (ImGui::Checkbox("Soft limiter", &limiter)) option.audio_limiter = limiter ? 1 : 0;
+            ImGui::SliderInt("High-pass Hz", &option.audio_highpass_hz, 0, 1000);
+            ImGui::SliderInt("Low-pass Hz", &option.audio_lowpass_hz, 0, 20000);
+            ImGui::SliderInt("Mixer headroom dB", &option.audio_headroom_db, 0, 9);
             if (arcade_machine_active())
             {
                 ImGui::Separator();
@@ -1627,6 +2241,12 @@ static void handle_event(AppState &app, const SDL_Event &e)
         case SDL_EVENT_KEY_UP:
         {
             bool down = e.type == SDL_EVENT_KEY_DOWN;
+            if (down && !e.key.repeat &&
+                (e.key.scancode == SDL_SCANCODE_F11 || e.key.key == SDLK_F11))
+            {
+                sdl3_set_fullscreen(app, !app.ui.fullscreen);
+                break;
+            }
             if (app.capture_binding >= 0 && down)
             {
                 g_bindings[app.capture_binding].scan = e.key.scancode;
@@ -1713,13 +2333,22 @@ static void update_virtual_keyboard_gamepad(AppState &app)
 
 static bool init_sdl(AppState &app)
 {
+    const std::string audio_sample_frames = std::to_string(std::clamp(app.audio_device_sample_frames, 64, 4096));
+#ifdef SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, audio_sample_frames.c_str());
+#endif
+#ifdef SDL_HINT_AUTO_UPDATE_JOYSTICKS
+    SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, "1");
+#endif
+    SDL_SetHint(SDL_HINT_RENDER_VSYNC, app.vsync ? "1" : "0");
+
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) return false;
-    SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
-    app.window = SDL_CreateWindow("SMS Plus GX SDL3", HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, SDL_WINDOW_RESIZABLE);
+    app.window = SDL_CreateWindow(MULTIREXZ80_SDL3_WINDOW_TITLE, HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, SDL_WINDOW_RESIZABLE);
     if (!app.window) return false;
     app.renderer = SDL_CreateRenderer(app.window, nullptr);
     if (!app.renderer) return false;
-    #ifdef SMSPLUS_RENDER_32BPP
+    sdl3_apply_vsync(app);
+    #ifdef MULTIREXZ80_RENDER_32BPP
     /*
      * Do not hide this behind #if defined(SDL_PIXELFORMAT_XRGB8888).  In SDL3
      * some pixel formats may be enum constants rather than preprocessor macros,
@@ -1733,7 +2362,8 @@ static bool init_sdl(AppState &app)
 #endif
     if (!app.texture) return false;
     SDL_SetTextureScaleMode(app.texture, SDL_SCALEMODE_NEAREST);
-    if (app.ui.fullscreen) SDL_SetWindowFullscreen(app.window, true);
+    sdl3_update_window_title(app);
+    if (app.ui.fullscreen) sdl3_set_fullscreen(app, true);
     SDL_StartTextInput(app.window);
 
     if (app.ui.audio)
@@ -1762,6 +2392,8 @@ static void init_imgui(AppState &app)
 
 static void shutdown_app(AppState &app)
 {
+    sdl3_audio_dump_close(app);
+    save_sdl3_config(app);
     if (app.rom_loaded) system_poweroff();
     system_shutdown();
     if (bios.rom) { std::free(bios.rom); bios.rom = nullptr; }
@@ -1771,6 +2403,7 @@ static void shutdown_app(AppState &app)
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
     if (app.state_thumb_texture) SDL_DestroyTexture(app.state_thumb_texture);
+    if (app.rewind_thumb_texture) SDL_DestroyTexture(app.rewind_thumb_texture);
     if (app.texture) SDL_DestroyTexture(app.texture);
     if (app.renderer) SDL_DestroyRenderer(app.renderer);
     if (app.window) SDL_DestroyWindow(app.window);
@@ -1784,7 +2417,9 @@ int main(int argc, char **argv)
     AppState app;
     set_defaults();
     init_user_paths(app);
+    load_sdl3_config(app);
     parse_args(app, argc, argv);
+    normalize_audio_options();
     ensure_state_dir(app.state_dir);
     ensure_state_dir(app.save_dir);
     if (!init_bitmap()) return 1;
@@ -1798,6 +2433,8 @@ int main(int argc, char **argv)
 
     if (!app.rom_path.empty()) load_game(app, app.rom_path);
     else app.status = "Drop a ROM, pass one on the command line, or choose it from the browser.";
+    if (!sdl3_audio_dump_open(app))
+        return 1;
 
     while (app.running)
     {
@@ -1808,6 +2445,7 @@ int main(int argc, char **argv)
 
         SDL_Event e;
         while (SDL_PollEvent(&e)) handle_event(app, e);
+        SDL_UpdateGamepads();
         update_keyboard_state_from_bindings();
         update_coleco_keypad_from_inputs(app);
         update_virtual_keyboard_gamepad(app);
@@ -1832,8 +2470,10 @@ int main(int argc, char **argv)
                 }
                 maybe_capture_rewind(app);
                 maybe_autosave(app);
-                if (app.audio_stream && snd.output && snd.sample_count > 0)
-                    SDL_PutAudioStreamData(app.audio_stream, snd.output, snd.sample_count * 2 * sizeof(int16_t));
+                sdl3_queue_audio_frame(app);
+                if (app.run_seconds > 0 &&
+                    app.frame_counter >= static_cast<uint64_t>(app.run_seconds) * static_cast<uint64_t>(sdl3_current_fps()))
+                    app.running = false;
             }
         }
 
@@ -1843,12 +2483,12 @@ int main(int argc, char **argv)
         if (app.rom_loaded) render_core(app);
         else { SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 255); SDL_RenderClear(app.renderer); }
         draw_menu_hint(app);
-        if (app.menu_hint_frames > 0) app.menu_hint_frames--;
         draw_menu(app);
         draw_virtual_keyboard(app);
         ImGui::Render();
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), app.renderer);
         SDL_RenderPresent(app.renderer);
+        sdl3_pace_frame(app);
     }
 
     shutdown_app(app);

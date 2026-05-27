@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 // license:GPL-2.0+
 // copyright-holders:Jarek Burczynski,Tatsuyuki Satoh
 /*
@@ -1738,7 +1749,6 @@ static void OPLResetChip(FM_OPL *OPL)
 }
 
 
-#if 0 // not used anywhere
 static void OPL_postload(FM_OPL *OPL)
 {
 	int slot, ch;
@@ -1788,13 +1798,15 @@ static void OPL_postload(FM_OPL *OPL)
 #if BUILD_Y8950
 	if ( (OPL->type & OPL_TYPE_ADPCM) && (OPL->deltat) )
 	{
-		// We really should call the postlod function for the YM_DELTAT, but it's hard without registers
-		// (see the way the YM2610 does it)
-		//YM_DELTAT_postload(OPL->deltat, REGS);
+		YM_DELTAT *DELTAT = OPL->deltat;
+		DELTAT->freqbase = OPL->freqbase;
+		DELTAT->output_pointer = &OPL->output_deltat[0];
+		DELTAT->pan = &OPL->output_deltat[(DELTAT->control2 >> 6) & 0x03];
+		DELTAT->portshift = 5;
+		DELTAT->output_range = 1 << 23;
 	}
 #endif
 }
-#endif
 
 
 /* Create one of virtual YM3812/YM3526/Y8950 */
@@ -2401,3 +2413,172 @@ void y8950_set_keyboard_handler(void *chip,OPL_PORTHANDLER_W KeyboardHandler_w,O
 }
 
 #endif
+
+
+#define MAME_FMOPL_STATE_MAGIC   0x53504c4fu /* "OLPS" native-endian */
+#define MAME_FMOPL_STATE_VERSION 1u
+
+typedef struct
+{
+    UINT32 magic;
+    UINT32 version;
+    UINT32 total_size;
+    UINT32 type;
+    UINT32 fm_size;
+    UINT32 deltat_size;
+} mame_fmopl_state_header_t;
+
+static UINT32 mame_fmopl_state_size(FM_OPL *OPL)
+{
+    UINT32 deltat_size = 0;
+    if (!OPL) return 0;
+#if BUILD_Y8950
+    if ((OPL->type & OPL_TYPE_ADPCM) && OPL->deltat)
+        deltat_size = (UINT32)sizeof(YM_DELTAT);
+#endif
+    return (UINT32)(sizeof(mame_fmopl_state_header_t) + sizeof(FM_OPL) + deltat_size);
+}
+
+static int mame_fmopl_save_state(FM_OPL *OPL, void *data, UINT32 size)
+{
+    mame_fmopl_state_header_t hdr;
+    UINT8 *p = (UINT8 *)data;
+    UINT32 total = mame_fmopl_state_size(OPL);
+    if (!OPL || !data || size < total) return 0;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.magic = MAME_FMOPL_STATE_MAGIC;
+    hdr.version = MAME_FMOPL_STATE_VERSION;
+    hdr.total_size = total;
+    hdr.type = OPL->type;
+    hdr.fm_size = (UINT32)sizeof(FM_OPL);
+#if BUILD_Y8950
+    hdr.deltat_size = ((OPL->type & OPL_TYPE_ADPCM) && OPL->deltat) ? (UINT32)sizeof(YM_DELTAT) : 0;
+#endif
+    memcpy(p, &hdr, sizeof(hdr));
+    p += sizeof(hdr);
+    memcpy(p, OPL, sizeof(FM_OPL));
+    p += sizeof(FM_OPL);
+#if BUILD_Y8950
+    if (hdr.deltat_size)
+        memcpy(p, OPL->deltat, sizeof(YM_DELTAT));
+#endif
+    return 1;
+}
+
+static int mame_fmopl_load_state(FM_OPL *OPL, const void *data, UINT32 size)
+{
+    const UINT8 *p = (const UINT8 *)data;
+    mame_fmopl_state_header_t hdr;
+    OPL_TIMERHANDLER timer_handler;
+    void *timer_param;
+    OPL_IRQHANDLER irq_handler;
+    void *irq_param;
+    OPL_UPDATEHANDLER update_handler;
+    void *update_param;
+#if BUILD_Y8950
+    YM_DELTAT *current_deltat = NULL;
+    UINT8 *deltat_memory = NULL;
+    UINT32 deltat_memory_size = 0;
+    UINT32 deltat_memory_mask = 0;
+    OPL_PORTHANDLER_R porthandler_r = NULL, keyboardhandler_r = NULL;
+    OPL_PORTHANDLER_W porthandler_w = NULL, keyboardhandler_w = NULL;
+    void *port_param = NULL, *keyboard_param = NULL;
+#endif
+
+    if (!OPL || !data || size < sizeof(hdr)) return 0;
+    memcpy(&hdr, p, sizeof(hdr));
+    if (hdr.magic != MAME_FMOPL_STATE_MAGIC || hdr.version != MAME_FMOPL_STATE_VERSION ||
+        hdr.fm_size != sizeof(FM_OPL) || hdr.total_size > size ||
+        hdr.total_size < sizeof(hdr) + sizeof(FM_OPL))
+        return 0;
+    if (hdr.type != OPL->type)
+        return 0;
+
+    timer_handler = OPL->timer_handler;
+    timer_param = OPL->TimerParam;
+    irq_handler = OPL->IRQHandler;
+    irq_param = OPL->IRQParam;
+    update_handler = OPL->UpdateHandler;
+    update_param = OPL->UpdateParam;
+#if BUILD_Y8950
+    current_deltat = OPL->deltat;
+    if (current_deltat)
+    {
+        deltat_memory = current_deltat->memory;
+        deltat_memory_size = current_deltat->memory_size;
+        deltat_memory_mask = current_deltat->memory_mask;
+    }
+    porthandler_r = OPL->porthandler_r;
+    porthandler_w = OPL->porthandler_w;
+    port_param = OPL->port_param;
+    keyboardhandler_r = OPL->keyboardhandler_r;
+    keyboardhandler_w = OPL->keyboardhandler_w;
+    keyboard_param = OPL->keyboard_param;
+#endif
+
+    p += sizeof(hdr);
+    memcpy(OPL, p, sizeof(FM_OPL));
+    p += sizeof(FM_OPL);
+
+    OPL->timer_handler = timer_handler;
+    OPL->TimerParam = timer_param;
+    OPL->IRQHandler = irq_handler;
+    OPL->IRQParam = irq_param;
+    OPL->UpdateHandler = update_handler;
+    OPL->UpdateParam = update_param;
+#if BUILD_Y8950
+    OPL->deltat = current_deltat;
+    OPL->porthandler_r = porthandler_r;
+    OPL->porthandler_w = porthandler_w;
+    OPL->port_param = port_param;
+    OPL->keyboardhandler_r = keyboardhandler_r;
+    OPL->keyboardhandler_w = keyboardhandler_w;
+    OPL->keyboard_param = keyboard_param;
+    if (hdr.deltat_size)
+    {
+        if (!OPL->deltat || hdr.deltat_size != sizeof(YM_DELTAT) || p + hdr.deltat_size > (const UINT8 *)data + size)
+            return 0;
+        memcpy(OPL->deltat, p, sizeof(YM_DELTAT));
+        OPL->deltat->memory = deltat_memory;
+        OPL->deltat->memory_size = deltat_memory_size;
+        OPL->deltat->memory_mask = deltat_memory_mask;
+        OPL->deltat->status_set_handler = Y8950_deltat_status_set;
+        OPL->deltat->status_reset_handler = Y8950_deltat_status_reset;
+        OPL->deltat->status_change_which_chip = OPL;
+        OPL->deltat->status_change_EOS_bit = 0x10;
+        OPL->deltat->status_change_BRDY_bit = 0x08;
+    }
+#endif
+    OPL_postload(OPL);
+    return 1;
+}
+
+uint32_t ym3526_state_size(void *chip)
+{
+    return mame_fmopl_state_size((FM_OPL *)chip);
+}
+
+int ym3526_save_state(void *chip, void *data, uint32_t size)
+{
+    return mame_fmopl_save_state((FM_OPL *)chip, data, size);
+}
+
+int ym3526_load_state(void *chip, const void *data, uint32_t size)
+{
+    return mame_fmopl_load_state((FM_OPL *)chip, data, size);
+}
+
+uint32_t y8950_state_size(void *chip)
+{
+    return mame_fmopl_state_size((FM_OPL *)chip);
+}
+
+int y8950_save_state(void *chip, void *data, uint32_t size)
+{
+    return mame_fmopl_save_state((FM_OPL *)chip, data, size);
+}
+
+int y8950_load_state(void *chip, const void *data, uint32_t size)
+{
+    return mame_fmopl_load_state((FM_OPL *)chip, data, size);
+}

@@ -11,10 +11,10 @@
 core
 include/
 source/nonfree/
-sms_sdl
+multirexz80_sdl
 *.out
 log.txt
 Makefile
 Makefile.*
-./sms_sdl
+./multirexz80_sdl
 *.ipk

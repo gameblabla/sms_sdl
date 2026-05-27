@@ -1,7 +1,18 @@
 /*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+/*
  * Texas Instruments / Sega SN76489-family PSG emulation.
  *
- * Compact C backend for SMS Plus GX when MAME_PSG is enabled.  This follows
+ * Compact C backend for MultiRexZ80 when MAME_PSG is enabled.  This follows
  * current MAME sn76496_base_device semantics for the variants used here:
  * Sega VDP PSG, Game Gear PSG, TI SN76489, and SN76489A-style PSG.
  *
@@ -10,8 +21,8 @@
  * copyright-holders:Nicola Salmoria, with contributions by Lord Nightmare,
  * Michael Zapf, ValleyBell, Qbix, NewRisingSun, and other MAME contributors.
  *
- * This C adaptation and SMS Plus GX integration:
- * Copyright (C) 2026 SMS Plus GX contributors.
+ * This C adaptation and MultiRexZ80 integration:
+ * Copyright (C) 2026 gameblabla.
  */
 
 #include <stdint.h>
@@ -135,7 +146,7 @@ void SN76489_Init(uint32_t machine, uint32_t clock, uint32_t sample_rate)
 
     /* MAME runs the PSG stream at clock/2, then applies m_clock_divider
      * inside sound_stream_update.  The C port keeps the same internal clock
-     * phase and samples the resulting output at SMS Plus GX's mixer rate. */
+     * phase and samples the resulting output at MultiRexZ80's mixer rate. */
     PSG.m_internal_samples_per_output = sample_rate ? ((double)clock / 2.0) / (double)sample_rate : 0.0;
     PSG.m_internal_sample_phase = 0.0;
 }

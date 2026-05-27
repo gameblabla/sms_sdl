@@ -1,10 +1,26 @@
 /*
- * 93C46 serial EEPROM support for SMS Plus GX.
+ * MultiRexZ80
  *
- * Copyright (C) 2026 SMS Plus GX contributors
- * Mapper behavior derived from CrabEmu's 93C46 mapper implementation.
- * Copyright (C) 2005-2012 Lawrence Sebald
- * Licensed under the GNU General Public License version 2 or compatible terms.
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+/*
+ * 93C46 serial EEPROM support for MultiRexZ80.
+ *
+ * Copyright (C) 2026 gameblabla
+ *
+ * This 93C46 mapper/eeprom interface is largely derived from CrabEmu's
+ * consoles/sms/mapper-93c46.c.
+ *
+ * CrabEmu 93C46 mapper implementation:
+ * Copyright (C) 2005, 2006, 2007, 2008, 2009, 2011, 2012 Lawrence Sebald
+ *
+ * CrabEmu is licensed under the GNU General Public License version 2.
  */
 
 #ifndef EEPROM93C46_H_

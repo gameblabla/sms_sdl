@@ -1,4 +1,4 @@
-PRGNAME     = sms_sdl
+PRGNAME     = multirexz80_sdl
 CC			= /opt/retrostone2-toolchain/usr/bin/arm-linux-gcc
 
 # Possible choices : rs97, k3s (PAP K3S), sdl, amini, fbdev
@@ -20,7 +20,7 @@ STATIC_MEMORY_BYTES ?= 16777216
 ENABLE_ARCADE ?= 1
 ENABLE_COLECO ?= 1
 ENABLE_SORDM5 ?= 1
-FEATURE_DEFS := -DSMSPLUS_ENABLE_ARCADE=$(ENABLE_ARCADE) -DSMSPLUS_ENABLE_COLECO=$(ENABLE_COLECO) -DSMSPLUS_ENABLE_SORDM5=$(ENABLE_SORDM5)
+FEATURE_DEFS := -DMULTIREXZ80_ENABLE_ARCADE=$(ENABLE_ARCADE) -DMULTIREXZ80_ENABLE_COLECO=$(ENABLE_COLECO) -DMULTIREXZ80_ENABLE_SORDM5=$(ENABLE_SORDM5)
 
 SRCDIR = ./source ./source/other/eeprom/93c46 ./source/other/decode ./source/video/sms_vdp ./source/video/tms9918 ./source/sound/mixer ./source/sound/opll ./source/sound/opl1 ./source/cpu_cores/$(Z80_CORE) ./source/unzip
 SRCDIR += ./source/scalers ./source/ports/$(PORT) ./source/ports/sdl12_common ./source/sound/psg/$(PSG_ENGINE) ./source/sound_output/$(SOUND_OUTPUT)
@@ -47,7 +47,7 @@ CFLAGS		= -Wall -Wextra -Ofast -fdata-sections -ffunction-sections -fsingle-prec
 CFLAGS		+= -fsection-anchors -fno-builtin
 CFLAGS		+= -fno-math-errno -freorder-functions -std=gnu99
 
-CFLAGS		+= -DNOBLANKING_LEFTCOLUM -D_8BPP_COLOR
+CFLAGS		+= -DNOBLANKING_LEFTCOLUM -DMULTIREXZ80_RENDER_32BPP
 CFLAGS		+= $(FEATURE_DEFS) -DLSB_FIRST -std=gnu99
 CFLAGS += -Isource -Isource/other/eeprom/93c46 -Isource/other/decode -Isource/platform/coleco -Isource/platform/sord_m5 -Isource/video/sms_vdp -Isource/video/tms9918 -Isource/video/sega_system1 -Isource/video/snk_ikari_psychos -Isource/sound/mixer -Isource/sound/opll -Isource/sound/opl1 -Isource/sound/psg/$(PSG_ENGINE) -Isource/cpu_cores/$(Z80_CORE) -Isource/scalers -Isource/ports/$(PORT) -Isource/ports/sdl12_common -Isource/unzip -Isource/sdl -Isource/sound_output
 
@@ -70,7 +70,7 @@ CFLAGS 		+= -DNOZIP_SUPPORT
 endif
 
 ifeq ($(STATIC_MEMORY), 1)
-CFLAGS 		+= -DSMSPLUS_STATIC_MEMORY -DSMSPLUS_STATIC_MEMORY_BYTES=$(STATIC_MEMORY_BYTES)
+CFLAGS 		+= -DMULTIREXZ80_STATIC_MEMORY -DMULTIREXZ80_STATIC_MEMORY_BYTES=$(STATIC_MEMORY_BYTES)
 endif
 
 ifeq ($(SCALE2X_UPSCALER), 1)

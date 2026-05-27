@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
  *
- *  additionnal code by Eke-Eke (SMS Plus GX)
+ *  additional code by Eke-Eke (SMS Plus GX)
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -29,17 +40,17 @@
  * Native renderer output format.
  *
  * Legacy handheld/SDL 1.2 ports normally keep the old RGB565 path.  Modern
- * frontends can compile with -DSMSPLUS_RENDER_32BPP to render directly to
+ * frontends can compile with -DMULTIREXZ80_RENDER_32BPP to render directly to
  * XRGB8888/ARGB8888-style pixels, avoiding the lossy RGB565 remap and the
  * extra conversion most 32 bpp GPUs perform internally.
  */
-#ifdef SMSPLUS_RENDER_32BPP
-#define SMSPLUS_RENDER_DEPTH 32
-#define SMSPLUS_RENDER_BYTES_PER_PIXEL 4
+#ifdef MULTIREXZ80_RENDER_32BPP
+#define MULTIREXZ80_RENDER_DEPTH 32
+#define MULTIREXZ80_RENDER_BYTES_PER_PIXEL 4
 #define MAKE_PIXEL(r,g,b)   (0xFF000000u | ((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b))
 #else
-#define SMSPLUS_RENDER_DEPTH 16
-#define SMSPLUS_RENDER_BYTES_PER_PIXEL 2
+#define MULTIREXZ80_RENDER_DEPTH 16
+#define MULTIREXZ80_RENDER_BYTES_PER_PIXEL 2
 /* Pack RGB data into a 16-bit RGB 5:6:5 format */
 #define MAKE_PIXEL(r,g,b)   (((r << 8) & 0xF800) | ((g << 3) & 0x07E0) | ((b >> 3) & 0x001F))
 #endif

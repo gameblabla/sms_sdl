@@ -1,5 +1,16 @@
-#ifndef SMSPLUS_SDL12_COMMON_H_
-#define SMSPLUS_SDL12_COMMON_H_
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+#ifndef MULTIREXZ80_SDL12_COMMON_H_
+#define MULTIREXZ80_SDL12_COMMON_H_
 
 #include <stdint.h>
 #include <SDL/SDL.h>
@@ -11,7 +22,7 @@
  * System 1 dial fallback live here so fixes do not have to be copied across
  * a dozen frontends.
  */
-typedef struct smsplus_sdl12_keymap_t
+typedef struct multirexz80_sdl12_keymap_t
 {
     SDLKey up;
     SDLKey down;
@@ -22,24 +33,45 @@ typedef struct smsplus_sdl12_keymap_t
     SDLKey start;
     SDLKey select;
     SDLKey keypad[12];  /* 0..9, *, #/$-style aliases */
-} smsplus_sdl12_keymap_t;
+} multirexz80_sdl12_keymap_t;
 
-void smsplus_sdl12_keymap_defaults(smsplus_sdl12_keymap_t *map);
-int smsplus_sdl12_arcade_active(void);
-uint32_t smsplus_sdl12_update_key(SDLKey key, int32_t pressed,
-                                  const smsplus_sdl12_keymap_t *map,
+void multirexz80_sdl12_keymap_defaults(multirexz80_sdl12_keymap_t *map);
+int multirexz80_sdl12_arcade_active(void);
+uint32_t multirexz80_sdl12_update_key(SDLKey key, int32_t pressed,
+                                  const multirexz80_sdl12_keymap_t *map,
                                   uint8_t *select_pressed);
-void smsplus_sdl12_update_arcade_from_key_state(const uint8_t *keys);
-void smsplus_sdl12_frame_update(void);
-void smsplus_sdl12_set_arcade_button(uint8_t mask, int32_t pressed);
+void multirexz80_sdl12_update_arcade_from_key_state(const uint8_t *keys);
+void multirexz80_sdl12_frame_update(void);
+void multirexz80_sdl12_set_arcade_button(uint8_t mask, int32_t pressed);
 
-void smsplus_sdl12_state_file(const char *stdir, const char *gamename, uint8_t slot_number, uint8_t mode);
-void smsplus_sdl12_sram_file(const char *sramfile, uint8_t *sram, uint8_t mode);
+/* Active source rectangle for the current emulated display.  Legacy SDL 1.2
+ * ports used hard-coded 256xvdp.height SMS assumptions; arcade boards expose
+ * their exact active raster through bitmap.viewport and can be wider/taller. */
+typedef struct multirexz80_sdl12_view_t
+{
+    int x;
+    int y;
+    int w;
+    int h;
+    int pitch_pixels;
+    int bytes_per_pixel;
+} multirexz80_sdl12_view_t;
 
-static inline void smsplus_sdl12_keymap_from_config(smsplus_sdl12_keymap_t *map,
+void multirexz80_sdl12_get_active_view(multirexz80_sdl12_view_t *view);
+void multirexz80_sdl12_fit_rect(SDL_Rect *dst, int dst_w, int dst_h, int src_w, int src_h);
+int multirexz80_sdl12_bitmap_width(void);
+int multirexz80_sdl12_bitmap_height(void);
+int multirexz80_sdl12_surface_pitch_pixels(const SDL_Surface *surface);
+SDL_Surface *multirexz80_sdl12_create_rgb565_surface(int width, int height);
+
+
+void multirexz80_sdl12_state_file(const char *stdir, const char *gamename, uint8_t slot_number, uint8_t mode);
+void multirexz80_sdl12_sram_file(const char *sramfile, uint8_t *sram, uint8_t mode);
+
+static inline void multirexz80_sdl12_keymap_from_config(multirexz80_sdl12_keymap_t *map,
                                                     const uint32_t *config_buttons)
 {
-    smsplus_sdl12_keymap_defaults(map);
+    multirexz80_sdl12_keymap_defaults(map);
     if (!config_buttons) return;
 #ifdef CONFIG_BUTTON_UP
     map->up = (SDLKey)config_buttons[CONFIG_BUTTON_UP];
@@ -99,4 +131,4 @@ static inline void smsplus_sdl12_keymap_from_config(smsplus_sdl12_keymap_t *map,
 #endif
 }
 
-#endif /* SMSPLUS_SDL12_COMMON_H_ */
+#endif /* MULTIREXZ80_SDL12_COMMON_H_ */

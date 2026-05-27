@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  * Disabled arcade component ABI stubs.
  *
@@ -58,3 +69,6 @@ void snk_psychos_reset(void) { }
 void snk_psychos_frame(uint32_t skip_render) { (void)skip_render; }
 void snk_psychos_sound_reset(void) { }
 void snk_psychos_sound_update(int16_t **buffer, int32_t length) { (void)buffer; (void)length; }
+uint32_t snk_psychos_state_size(void) { return 0; }
+int snk_psychos_save_state(FILE *fd) { (void)fd; return 0; }
+int snk_psychos_load_state(FILE *fd, uint32_t size) { (void)fd; (void)size; return 0; }

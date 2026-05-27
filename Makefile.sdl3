@@ -1,4 +1,4 @@
-PRGNAME      = smsplus_sdl3
+PRGNAME      = multirexz80_sdl3
 CC           = gcc
 CXX          = g++
 PSG_ENGINE ?= mame_sn76489
@@ -16,18 +16,18 @@ ENABLE_SORDM5 ?= 1
 
 PSG_DEFS :=
 RENDER_DEFS :=
-FEATURE_DEFS := -DSMSPLUS_ENABLE_ARCADE=$(ENABLE_ARCADE) -DSMSPLUS_ENABLE_COLECO=$(ENABLE_COLECO) -DSMSPLUS_ENABLE_SORDM5=$(ENABLE_SORDM5)
+FEATURE_DEFS := -DMULTIREXZ80_ENABLE_ARCADE=$(ENABLE_ARCADE) -DMULTIREXZ80_ENABLE_COLECO=$(ENABLE_COLECO) -DMULTIREXZ80_ENABLE_SORDM5=$(ENABLE_SORDM5)
 STATIC_DEFS :=
 ifeq ($(PSG_ENGINE),mame_sn76489)
 PSG_DEFS += -DMAME_PSG
 endif
 
 ifeq ($(RENDER_BPP),32)
-RENDER_DEFS += -DSMSPLUS_RENDER_32BPP
+RENDER_DEFS += -DMULTIREXZ80_RENDER_32BPP
 endif
 
 ifeq ($(STATIC_MEMORY),1)
-STATIC_DEFS += -DSMSPLUS_STATIC_MEMORY -DSMSPLUS_STATIC_MEMORY_BYTES=$(STATIC_MEMORY_BYTES)
+STATIC_DEFS += -DMULTIREXZ80_STATIC_MEMORY -DMULTIREXZ80_STATIC_MEMORY_BYTES=$(STATIC_MEMORY_BYTES)
 endif
 
 IMGUI_DIR   ?= external/imgui
@@ -36,15 +36,15 @@ CORE_DIRS = ./source ./source/other/eeprom/93c46 ./source/other/decode ./source/
 CPP_DIRS     = ./source/ports/sdl3
 
 ifeq ($(ENABLE_COLECO),1)
-SRCDIR += ./source/platform/coleco
+CORE_DIRS += ./source/platform/coleco
 endif
 ifeq ($(ENABLE_SORDM5),1)
-SRCDIR += ./source/platform/sord_m5
+CORE_DIRS += ./source/platform/sord_m5
 endif
 ifeq ($(ENABLE_ARCADE),1)
-SRCDIR += ./source/video/sega_system1 ./source/video/snk_ikari_psychos
+CORE_DIRS += ./source/video/sega_system1 ./source/video/snk_ikari_psychos
 else
-SRCDIR += ./source/platform/arcade_disabled
+CORE_DIRS += ./source/platform/arcade_disabled
 endif
 VPATH        = $(CORE_DIRS) ./source/unzip $(CPP_DIRS) $(IMGUI_DIR) $(IMGUI_DIR)/backends
 
@@ -72,7 +72,7 @@ OBJS         = $(OBJS_C) $(OBJS_CPP)
 SDL3_CFLAGS := $(shell pkg-config --cflags sdl3 2>/dev/null)
 SDL3_LIBS   := $(shell pkg-config --libs sdl3 2>/dev/null)
 
-COMMON_DEFS  = -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DSMSPLUS_SDL3 $(ZIP_DEFS) $(PSG_DEFS) $(RENDER_DEFS) $(FEATURE_DEFS) $(STATIC_DEFS)
+COMMON_DEFS  = -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DMULTIREXZ80_SDL3 $(ZIP_DEFS) $(PSG_DEFS) $(RENDER_DEFS) $(FEATURE_DEFS) $(STATIC_DEFS)
 COMMON_INC = -Isource -Isource/other/eeprom/93c46 -Isource/other/decode -Isource/platform/coleco -Isource/platform/sord_m5 -Isource/video/sms_vdp -Isource/video/tms9918 -Isource/video/sega_system1 -Isource/video/snk_ikari_psychos -Isource/sound/mixer -Isource/sound/opll -Isource/sound/opl1 -Isource/sound/psg/$(PSG_ENGINE) -Isource/cpu_cores/$(Z80_CORE) -Isource/ports/sdl3 -Isource/sound_output -Isource/unzip
 IMGUI_INC    = -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 CFLAGS       = -O2 -g -Wall -Wextra -std=gnu99 $(COMMON_DEFS) $(COMMON_INC) $(SDL3_CFLAGS)

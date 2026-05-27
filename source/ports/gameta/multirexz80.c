@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -10,7 +21,7 @@
 
 #include "shared.h"
 #include "scaler.h"
-#include "smsplus.h"
+#include "multirexz80.h"
 #include "sdl12_common.h"
 #include "font_drawing.h"
 #include "sound_output.h"
@@ -32,77 +43,92 @@ static uint8_t selectpressed = 0;
 static uint8_t save_slot = 0;
 static uint8_t quit = 0;
 
-static const int8_t upscalers_available = 1
+static const int8_t upscalers_available = 2
 #ifdef SCALE2X_UPSCALER
 +1
 #endif
 ;
 
-static void video_update()
+static void video_update(void)
 {
-#ifdef SCALE2X_UPSCALER
+	multirexz80_sdl12_view_t view;
 	SDL_Rect dst;
-#endif
-	SDL_LockSurface(sdl_screen);
-	switch(option.fullscreen) 
+	int screen_pitch;
+	multirexz80_sdl12_get_active_view(&view);
+
+	if (SDL_LockSurface(sdl_screen) == 0)
 	{
-		// Native
-        case 0: 
-		if(sms.console == CONSOLE_GG) 
-			bitmap_scale(48,0,160,144,160,144,256,HOST_WIDTH_RESOLUTION-160,(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)sdl_screen->pixels+(HOST_WIDTH_RESOLUTION-160)/2+(HOST_HEIGHT_RESOLUTION-144)/2*HOST_WIDTH_RESOLUTION);
-		else 
-			bitmap_scale(0,0,256,vdp.height,256,(vdp.height),256,HOST_WIDTH_RESOLUTION-256,(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)sdl_screen->pixels+(HOST_WIDTH_RESOLUTION-256)/2+(HOST_HEIGHT_RESOLUTION-(vdp.height))/2*HOST_WIDTH_RESOLUTION);
-		break;
-		// Fullscreen
-		case 1:
-		if(sms.console == CONSOLE_GG) 
-			upscale_160x144_to_320x240((uint32_t* restrict)sdl_screen->pixels, (uint32_t* restrict)sms_bitmap->pixels+24);
-		else 
-			upscale_SMS_to_320x240((uint32_t* restrict)sdl_screen->pixels, (uint32_t* restrict)sms_bitmap->pixels, vdp.height);
-		break;
-		// Hqx
-		case 2:
+		screen_pitch = multirexz80_sdl12_surface_pitch_pixels(sdl_screen);
+		if (screen_pitch <= 0) screen_pitch = sdl_screen->w;
+		SDL_FillRect(sdl_screen, NULL, 0);
+		switch(option.fullscreen)
+		{
+			case 0:
+				dst.x = (Sint16)((sdl_screen->w - view.w) / 2);
+				dst.y = (Sint16)((sdl_screen->h - view.h) / 2);
+				dst.w = (Uint16)view.w;
+				dst.h = (Uint16)view.h;
+				if (dst.x < 0 || dst.y < 0)
+					multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w, view.h);
+				break;
+			case 1:
+			default:
+				dst.x = 0;
+				dst.y = 0;
+				dst.w = (Uint16)sdl_screen->w;
+				dst.h = (Uint16)sdl_screen->h;
+				break;
+			case 2:
+				multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w, view.h);
+				break;
+			case 3:
+			case 4:
 #ifdef SCALE2X_UPSCALER
-		if(sms.console == CONSOLE_GG) 
-		{
-			dst.x = 96;
-			dst.y = 0;
-			dst.w = 320;
-			dst.h = 144*2;
-		}
-		else
-		{
-			uint32_t hide_left = (vdp.reg[0] & 0x20) ? 1 : 0;
-			dst.x = hide_left ? 16 : 0;
-			dst.y = 0;
-			dst.w = (hide_left ? 248 : 256)*2;
-			dst.h = vdp.height*2;
-		}
-		scale2x(sms_bitmap->pixels, scale2x_buf->pixels, 512, 1024, 256, 240);
-		bitmap_scale(dst.x,0,dst.w,dst.h,HOST_WIDTH_RESOLUTION,HOST_HEIGHT_RESOLUTION,512,0,scale2x_buf->pixels,sdl_screen->pixels);
+				if (view.w * 2 <= scale2x_buf->w && view.h * 2 <= scale2x_buf->h)
+				{
+					scale2x((uint16_t *)sms_bitmap->pixels + view.y * view.pitch_pixels + view.x,
+					        (uint16_t *)scale2x_buf->pixels,
+					        sms_bitmap->pitch,
+					        scale2x_buf->pitch,
+					        view.w, view.h);
+					multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w * 2, view.h * 2);
+					bitmap_scale(0, 0, view.w * 2, view.h * 2, dst.w, dst.h,
+					             scale2x_buf->pitch >> 1, screen_pitch - dst.w,
+					             (uint16_t * restrict)scale2x_buf->pixels,
+					             (uint16_t * restrict)sdl_screen->pixels + dst.x + dst.y * screen_pitch);
+					SDL_UnlockSurface(sdl_screen);
+					SDL_Flip(sdl_screen);
+					return;
+				}
 #endif
-		break;
+				multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w, view.h);
+				break;
+		}
+		bitmap_scale(view.x, view.y, view.w, view.h, dst.w, dst.h,
+		             view.pitch_pixels, screen_pitch - dst.w,
+		             (uint16_t * restrict)sms_bitmap->pixels,
+		             (uint16_t * restrict)sdl_screen->pixels + dst.x + dst.y * screen_pitch);
+		SDL_UnlockSurface(sdl_screen);
 	}
-	SDL_UnlockSurface(sdl_screen);	
 	SDL_Flip(sdl_screen);
 }
 
 void smsp_state(uint8_t slot_number, uint8_t mode)
 {
-	smsplus_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
+	multirexz80_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
 }
 
 void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
 {
 	(void)slot_number;
-	smsplus_sdl12_sram_file(gdata.sramfile, sram, mode);
+	multirexz80_sdl12_sram_file(gdata.sramfile, sram, mode);
 }
 
 static uint32_t sdl_controls_update_input(SDLKey k, int32_t p)
 {
-	smsplus_sdl12_keymap_t map;
-	smsplus_sdl12_keymap_from_config(&map, option.config_buttons);
-	return smsplus_sdl12_update_key(k, p, &map, &selectpressed);
+	multirexz80_sdl12_keymap_t map;
+	multirexz80_sdl12_keymap_from_config(&map, option.config_buttons);
+	return multirexz80_sdl12_update_key(k, p, &map, &selectpressed);
 }
 
 
@@ -146,7 +172,7 @@ static void bios_init()
 static void smsp_gamedata_set(char *filename) 
 {
 	// Set paths, create directories
-	snprintf(home_path, sizeof(home_path), "%s/.smsplus/", getenv("HOME"));
+	snprintf(home_path, sizeof(home_path), "%s/.multirexz80/", getenv("HOME"));
 	
 	if (mkdir(home_path, 0755) && errno != EEXIST) {
 		fprintf(stderr, "Failed to create %s: %d\n", home_path, errno);
@@ -203,16 +229,18 @@ void Menu()
     SDL_Event Event;
     
     SDL_Surface* miniscreen = SDL_CreateRGBSurface(SDL_SWSURFACE, miniscreenwidth, miniscreenheight, 16, sdl_screen->format->Rmask, sdl_screen->format->Gmask, sdl_screen->format->Bmask, sdl_screen->format->Amask);
-
     SDL_LockSurface(miniscreen);
-    if(IS_GG)
-        bitmap_scale(48,0,160,144,miniscreenwidth,miniscreenheight,256,0,(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)miniscreen->pixels);
-    else
-        bitmap_scale(0,0,256,192,miniscreenwidth,miniscreenheight,256,0,(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)miniscreen->pixels);
-        
+    {
+        multirexz80_sdl12_view_t view;
+        multirexz80_sdl12_get_active_view(&view);
+        bitmap_scale(view.x, view.y, view.w, view.h, miniscreenwidth, miniscreenheight,
+                     view.pitch_pixels, 0,
+                     (uint16_t* restrict)sms_bitmap->pixels,
+                     (uint16_t* restrict)miniscreen->pixels);
+    }
     SDL_UnlockSurface(miniscreen);
     
-	Sound_Pause();
+    Sound_Pause();
     
     while (((currentselection != 1) && (currentselection != 6)) || (!pressed))
     {
@@ -250,6 +278,9 @@ void Menu()
 					print_string("Scaling : Stretched", TextRed, 0, 5, 105, sdl_screen->pixels);
 				break;
 				case 2:
+					print_string("Scaling : Keep Aspect", TextRed, 0, 5, 105, sdl_screen->pixels);
+				break;
+				case 3:
 					print_string("Scaling : EPX/Scale2x", TextRed, 0, 5, 105, sdl_screen->pixels);
 				break;
 			}
@@ -265,6 +296,9 @@ void Menu()
 					print_string("Scaling : Stretched", TextWhite, 0, 5, 105, sdl_screen->pixels);
 				break;
 				case 2:
+					print_string("Scaling : Keep Aspect", TextWhite, 0, 5, 105, sdl_screen->pixels);
+				break;
+				case 3:
 					print_string("Scaling : EPX/Scale2x", TextWhite, 0, 5, 105, sdl_screen->pixels);
 				break;
 			}
@@ -278,10 +312,10 @@ void Menu()
 		if (currentselection == 6) print_string("Quit", TextRed, 0, 5, 145, sdl_screen->pixels);
 		else print_string("Quit", TextWhite, 0, 5, 145, sdl_screen->pixels);
 		
-		print_string("Based on SMS Plus by Charles Mcdonald", TextWhite, 0, 5, 175, sdl_screen->pixels);
-		print_string("Fork of SMS Plus GX by gameblabla", TextWhite, 0, 5, 190, sdl_screen->pixels);
-		print_string("Scaler : Alekmaul", TextWhite, 0, 5, 205, sdl_screen->pixels);
-		print_string("Text drawing : n2DLib", TextWhite, 0, 5, 220, sdl_screen->pixels);
+		print_string("Based on SMS Plus GX / SMS Plus", TextWhite, 0, 5, 190, sdl_screen->pixels);
+		print_string("Fork of MultiRexZ80 by gameblabla", TextWhite, 0, 5, 215, sdl_screen->pixels);
+		print_string("Scaler : Alekmaul", TextWhite, 0, 5, 235, sdl_screen->pixels);
+		print_string("Text drawing : n2DLib", TextWhite, 0, 5, 255, sdl_screen->pixels);
 
         while (SDL_PollEvent(&Event))
         {
@@ -300,8 +334,6 @@ void Menu()
                             currentselection = 1;
                         break;
                     case SDLK_LCTRL:
-                    case SDLK_q:
-                    case SDLK_e:
                     case SDLK_LALT:
                     case SDLK_RETURN:
                         pressed = 1;
@@ -407,9 +439,12 @@ static void config_load()
 	snprintf(config_path, sizeof(config_path), "%s/config.cfg", home_path);
 	FILE* fp;
 	
+	printf("config_path %s\n", config_path);
+	
 	fp = fopen(config_path, "rb");
 	if (fp)
 	{
+		printf("caca\n");
 		fread(&option, sizeof(option), sizeof(int8_t), fp);
 		fclose(fp);
 	}
@@ -456,7 +491,7 @@ int main (int argc, char *argv[])
 	
 	if(argc < 2) 
 	{
-		fprintf(stderr, "Usage: ./smsplus [FILE]\n");
+		fprintf(stderr, "Usage: ./multirexz80 [FILE]\n");
 		return 0;
 	}
 	
@@ -496,20 +531,20 @@ int main (int argc, char *argv[])
 	}
 	
 	SDL_Init(SDL_INIT_VIDEO);
-	sdl_screen = SDL_SetVideoMode(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, SDL_HWSURFACE| SDL_DOUBLEBUF
-	);
-	sms_bitmap = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_WIDTH_SMS, 267, 16, 0, 0, 0, 0);
+	sdl_screen = SDL_SetVideoMode(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, SDL_HWSURFACE);
+	sms_bitmap = SDL_CreateRGBSurface(SDL_SWSURFACE, multirexz80_sdl12_bitmap_width(), multirexz80_sdl12_bitmap_height(), 16, 0, 0, 0, 0);
 	backbuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, 0, 0, 0, 0);
+	font_drawing_set_target((uint16_t *)backbuffer->pixels, backbuffer->pitch >> 1, backbuffer->w, backbuffer->h);
 	SDL_ShowCursor(0);
 
 #ifdef SCALE2X_UPSCALER
-	scale2x_buf = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_WIDTH_SMS*2, 480, 16, 0, 0, 0, 0);
+	scale2x_buf = SDL_CreateRGBSurface(SDL_SWSURFACE, multirexz80_sdl12_bitmap_width()*2, multirexz80_sdl12_bitmap_height()*2, 16, 0, 0, 0, 0);
 #endif
 	
 	fprintf(stdout, "CRC : %08X\n", cart.crc);
 	
 	// Set parameters for internal bitmap
-	bitmap.width = VIDEO_WIDTH_SMS;
+	bitmap.width = sms_bitmap->w;
 	bitmap.height = sms_bitmap->h;
 	bitmap.depth = 16;
 	bitmap.data = (uint8_t *)sms_bitmap->pixels;
@@ -520,7 +555,7 @@ int main (int argc, char *argv[])
 	bitmap.viewport.y = 0x00;
 	
 	//sms.territory = settings.misc_region;
-
+	
 	bios_init();
 
 	// Initialize all systems and power on
@@ -531,7 +566,7 @@ int main (int argc, char *argv[])
 	// Loop until the user closes the window
 	while (!quit) 
 	{
-		smsplus_sdl12_frame_update();
+		multirexz80_sdl12_frame_update();
 
 		// Execute frame(s)
 		system_frame(0);

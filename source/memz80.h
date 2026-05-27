@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
  *
- *  additionnal code by Eke-Eke (SMS Plus GX)
+ *  additional code by Eke-Eke (SMS Plus GX)
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -50,11 +61,11 @@ extern void md_port_w(uint16_t port, uint8_t data);
 extern uint8_t md_port_r(uint16_t port);
 extern void tms_port_w(uint16_t port, uint8_t data);
 extern uint8_t tms_port_r(uint16_t port);
-#if SMSPLUS_ENABLE_COLECO
+#if MULTIREXZ80_ENABLE_COLECO
 #include "platform/coleco/coleco.h"
 #endif
 
-#if SMSPLUS_ENABLE_SORDM5
+#if MULTIREXZ80_ENABLE_SORDM5
 #include "platform/sord_m5/sord_m5.h"
 #endif
 

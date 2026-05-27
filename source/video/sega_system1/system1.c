@@ -1,9 +1,21 @@
 /*
- * Sega System 1 support for SMS Plus GX.
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+/*
+ * Sega System 1 support for MultiRexZ80.
  *
  * Hardware behavior is derived from MAME's Sega System 1 driver
- * (src/mame/sega/system1.cpp and system1_v.cpp), credited there to
- * Jarek Parchanski, Nicola Salmoria and Mirko Buffoni.  This is a small
+ * (src/mame/sega/system1.cpp and system1_v.cpp).  MAME source license:
+ * BSD-3-Clause.  Original copyright-holders: Jarek Parchanski, Nicola
+ * Salmoria and Mirko Buffoni.  This is a small
  * independent C implementation for this emulator: it reuses the existing Z80
  * core and implements the System 1 address map, inputs, Block Gal ROM layout,
  * and a compact System 1 renderer.
@@ -596,7 +608,7 @@ uint8_t system1_readmem(uint16_t address)
 
 void system1_writemem(uint16_t address, uint8_t data)
 {
-    SMSPLUS_TRACE_MEM_WRITE(address, data);
+    MULTIREXZ80_TRACE_MEM_WRITE(address, data);
     if (s1.current_cpu == SYSTEM1_CPU_SOUND)
     {
         if (address >= 0x8000 && address < 0xa000)
@@ -1042,7 +1054,7 @@ static void system1_render(void)
                     }
                     if (dx >= 0 && dy >= 0 && dx < (int)bitmap.width && dy < (int)bitmap.height)
                     {
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
                         ((uint32_t *)(void *)(bitmap.data + (size_t)dy * bitmap.pitch))[dx] = out;
 #else
                         ((uint16_t *)(void *)(bitmap.data + (size_t)dy * bitmap.pitch))[dx] = (uint16_t)out;
@@ -1117,7 +1129,7 @@ void system1_frame(uint32_t skip_render)
         z80_set_irq_line(INPUT_LINE_IRQ0, s1.sound_irq_asserted ? ASSERT_LINE : CLEAR_LINE);
         z80_execute(line_z80 - s1.cpu[SYSTEM1_CPU_SOUND].cycles);
 
-        SMSPLUS_sound_update(line);
+        MULTIREXZ80_sound_update(line);
     }
     s1.cpu[SYSTEM1_CPU_MAIN].cycles = 0;
     s1.cpu[SYSTEM1_CPU_SOUND].cycles = 0;

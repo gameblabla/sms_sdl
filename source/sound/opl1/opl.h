@@ -1,5 +1,16 @@
-#ifndef SMSPLUS_OPL_H
-#define SMSPLUS_OPL_H
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+#ifndef MULTIREXZ80_OPL_H
+#define MULTIREXZ80_OPL_H
 
 #include <stdint.h>
 
@@ -28,8 +39,14 @@ void OPL_Write(opl_chip_t *chip, uint32_t offset, uint8_t data);
 void OPL_UpdateMono(opl_chip_t *chip, int16_t *buffer, int32_t samples);
 void OPL_UpdateStereo(opl_chip_t *chip, int16_t *left, int16_t *right, int32_t samples);
 
+/* Native save-state helpers for wrapped OPL cores.  The payload is intentionally
+ * emulator-native, matching the rest of MultiRexZ80's raw state format. */
+uint32_t OPL_GetStateSize(opl_chip_t *chip);
+int OPL_SaveState(opl_chip_t *chip, void *data, uint32_t size);
+int OPL_LoadState(opl_chip_t *chip, const void *data, uint32_t size);
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* SMSPLUS_OPL_H */
+#endif /* MULTIREXZ80_OPL_H */

@@ -1,10 +1,20 @@
 /*
- * SMS Plus GX unified Yamaha OPL/OPLL sound core.
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+/*
+ * MultiRexZ80 unified Yamaha OPL/OPLL sound core.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Integration/adapter code for SMS Plus GX: 2026, OpenAI/ChatGPT-assisted
- * work for John Do's SMS Plus GX SNK/System ports.
+ * Integration/adapter code for MultiRexZ80: gameblabla.
  *
  * OPL1/Y8950 core:
  *   MAME 0.72-derived FM OPL/Delta-T core, GPL-2.0-or-later. Used for
@@ -2370,4 +2380,98 @@ void OPL_UpdateStereo(opl_chip_t *chip, int16_t *left, int16_t *right, int32_t s
     }
     memset(left, 0, (size_t)samples * sizeof(int16_t));
     memset(right, 0, (size_t)samples * sizeof(int16_t));
+}
+
+
+#define OPL_WRAPPER_STATE_MAGIC   0x53504c4fu /* "OLPS" native-endian */
+#define OPL_WRAPPER_STATE_VERSION 1u
+
+typedef struct
+{
+    uint32_t magic;
+    uint32_t version;
+    uint32_t total_size;
+    uint32_t type;
+    uint32_t clock;
+    uint32_t rate;
+    uint32_t core_size;
+    uint8_t address;
+    uint8_t last_irq;
+    uint8_t timer_enabled[2];
+    double timer_period[2];
+    double timer_elapsed[2];
+} opl_wrapper_state_t;
+
+static uint32_t opl_core_state_size(opl_chip_t *chip)
+{
+    if (!chip || !chip->mame_fm) return 0;
+    if (chip->type == OPL_CHIP_YM3526)
+        return ym3526_state_size(chip->mame_fm);
+    if (chip->type == OPL_CHIP_Y8950)
+        return y8950_state_size(chip->mame_fm);
+    return 0;
+}
+
+uint32_t OPL_GetStateSize(opl_chip_t *chip)
+{
+    uint32_t core = opl_core_state_size(chip);
+    if (!chip || !core) return 0;
+    return (uint32_t)(sizeof(opl_wrapper_state_t) + core);
+}
+
+int OPL_SaveState(opl_chip_t *chip, void *data, uint32_t size)
+{
+    opl_wrapper_state_t st;
+    uint8_t *p = (uint8_t *)data;
+    uint32_t core;
+    if (!chip || !data) return 0;
+    core = opl_core_state_size(chip);
+    if (!core || size < sizeof(st) + core) return 0;
+    memset(&st, 0, sizeof(st));
+    st.magic = OPL_WRAPPER_STATE_MAGIC;
+    st.version = OPL_WRAPPER_STATE_VERSION;
+    st.total_size = (uint32_t)(sizeof(st) + core);
+    st.type = (uint32_t)chip->type;
+    st.clock = chip->clock;
+    st.rate = chip->rate;
+    st.core_size = core;
+    st.address = chip->address;
+    st.last_irq = chip->last_irq;
+    memcpy(st.timer_enabled, chip->timer_enabled, sizeof(st.timer_enabled));
+    memcpy(st.timer_period, chip->timer_period, sizeof(st.timer_period));
+    memcpy(st.timer_elapsed, chip->timer_elapsed, sizeof(st.timer_elapsed));
+    memcpy(p, &st, sizeof(st));
+    p += sizeof(st);
+    if (chip->type == OPL_CHIP_YM3526)
+        return ym3526_save_state(chip->mame_fm, p, core);
+    if (chip->type == OPL_CHIP_Y8950)
+        return y8950_save_state(chip->mame_fm, p, core);
+    return 0;
+}
+
+int OPL_LoadState(opl_chip_t *chip, const void *data, uint32_t size)
+{
+    opl_wrapper_state_t st;
+    const uint8_t *p = (const uint8_t *)data;
+    int ok = 0;
+    if (!chip || !data || size < sizeof(st)) return 0;
+    memcpy(&st, p, sizeof(st));
+    if (st.magic != OPL_WRAPPER_STATE_MAGIC || st.version != OPL_WRAPPER_STATE_VERSION ||
+        st.type != (uint32_t)chip->type || st.total_size > size ||
+        st.total_size < sizeof(st) || st.core_size != st.total_size - sizeof(st))
+        return 0;
+    p += sizeof(st);
+    if (chip->type == OPL_CHIP_YM3526)
+        ok = ym3526_load_state(chip->mame_fm, p, st.core_size);
+    else if (chip->type == OPL_CHIP_Y8950)
+        ok = y8950_load_state(chip->mame_fm, p, st.core_size);
+    if (!ok) return 0;
+    chip->address = st.address;
+    chip->last_irq = st.last_irq;
+    memcpy(chip->timer_enabled, st.timer_enabled, sizeof(chip->timer_enabled));
+    memcpy(chip->timer_period, st.timer_period, sizeof(chip->timer_period));
+    memcpy(chip->timer_elapsed, st.timer_elapsed, sizeof(chip->timer_elapsed));
+    if (chip->mame_fm)
+        opl_mame_set_handlers(chip);
+    return 1;
 }

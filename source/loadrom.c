@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
@@ -355,15 +366,15 @@ static int console_feature_enabled(uint8_t console)
 {
     switch (console)
     {
-#if !SMSPLUS_ENABLE_COLECO
+#if !MULTIREXZ80_ENABLE_COLECO
         case CONSOLE_COLECO:
             return 0;
 #endif
-#if !SMSPLUS_ENABLE_SORDM5
+#if !MULTIREXZ80_ENABLE_SORDM5
         case CONSOLE_SORDM5:
             return 0;
 #endif
-#if !SMSPLUS_ENABLE_ARCADE
+#if !MULTIREXZ80_ENABLE_ARCADE
         case CONSOLE_SYSTEME:
         case CONSOLE_SYSTEM1:
         case CONSOLE_SNKPSYCHOS:
@@ -1999,20 +2010,20 @@ void set_config()
 			sms.console = CONSOLE_SG1000;
 			cart.mapper = MAPPER_NONE;
 		break;
-#if SMSPLUS_ENABLE_COLECO
+#if MULTIREXZ80_ENABLE_COLECO
 		case 6:
 			sms.console = CONSOLE_COLECO;
 			if (cart.mapper != MAPPER_COLECO_MEGACART)
 				cart.mapper = MAPPER_NONE;
 		break;
 #endif
-#if SMSPLUS_ENABLE_SORDM5
+#if MULTIREXZ80_ENABLE_SORDM5
 		case 7:
 			sms.console = CONSOLE_SORDM5;
 			cart.mapper = MAPPER_NONE;
 		break;
 #endif
-#if SMSPLUS_ENABLE_ARCADE
+#if MULTIREXZ80_ENABLE_ARCADE
 		case 8:
 			sms.console = CONSOLE_SYSTEME;
 			cart.mapper = MAPPER_SYSTEME;
@@ -2041,7 +2052,7 @@ void set_config()
 #endif
 	}
 
-#if SMSPLUS_ENABLE_COLECO
+#if MULTIREXZ80_ENABLE_COLECO
 	if (coleco_megacart_heuristic())
 		cart.mapper = MAPPER_COLECO_MEGACART;
 #endif
@@ -2146,7 +2157,7 @@ uint32_t load_rom (char *filename)
 	{
 		char name[PATH_MAX];
 		int loaded_arcade_zip = 0;
-#if SMSPLUS_ENABLE_ARCADE
+#if MULTIREXZ80_ENABLE_ARCADE
 		loaded_arcade_zip = load_system1_zip(filename) || load_systeme_zip(filename) || load_snk_psychos_zip(filename);
 #endif
 		if (!loaded_arcade_zip)

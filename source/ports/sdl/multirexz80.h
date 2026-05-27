@@ -1,15 +1,28 @@
-#ifndef SMSPLUS_H
-#define SMSPLUS_H
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+#ifndef MULTIREXZ80_H
+#define MULTIREXZ80_H
 
 #include <SDL/SDL.h>
 
-#define HOST_WIDTH_RESOLUTION 480
-#define HOST_HEIGHT_RESOLUTION 320
+#define HOST_WIDTH_RESOLUTION 640
+#define HOST_HEIGHT_RESOLUTION 480
 
 #define VIDEO_WIDTH_SMS 256
 #define VIDEO_HEIGHT_SMS 192
 #define VIDEO_WIDTH_GG 160
 #define VIDEO_HEIGHT_GG 144
+
+//#define VSYNC_SUPPORTED 1
 
 extern SDL_Surface* sms_bitmap;
 

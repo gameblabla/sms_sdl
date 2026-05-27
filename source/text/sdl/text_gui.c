@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 #include <stdio.h>
 #include <SDL/SDL.h>
 #include <stdint.h>
 #include "shared.h"
-#include "smsplus.h"
+#include "multirexz80.h"
 #include "text_gui.h"
 
 SDL_Surface *font = NULL;
@@ -44,10 +55,16 @@ void gfx_font_print(SDL_Surface* dest, int32_t inX, int32_t inY, SDL_Surface* in
     uint8_t*  tempChar;
     int32_t   tempX = inX;
     int32_t   tempY = inY;
+    int32_t   destPitch;
+    int32_t   fontPitch;
     int32_t i, j, x, y;
 
     SDL_LockSurface(dest);
     SDL_LockSurface(inFont);
+    destPitch = dest->pitch >> 1;
+    fontPitch = inFont->pitch >> 1;
+    if (destPitch <= 0) destPitch = dest->w;
+    if (fontPitch <= 0) fontPitch = inFont->w;
 
     for(tempChar = (uint8_t*)inString; *tempChar != '\0'; tempChar++) 
     {
@@ -72,7 +89,7 @@ void gfx_font_print(SDL_Surface* dest, int32_t inX, int32_t inY, SDL_Surface* in
         {
             for(i = ((*tempChar & 0x0F) * (inFont->w >> 4)), x = tempX; (i < (((*tempChar & 0x0F) + 1) * (inFont->w >> 4))) && (x < dest->w); i++, x++)
             {
-                tempBuffer[(y * dest->w) + x] |= tempFont[(j * inFont->w) + i];
+                if (x >= 0 && y >= 0) tempBuffer[(y * destPitch) + x] |= tempFont[(j * fontPitch) + i];
             }
         }
         tempX += (inFont->w >> 4);
@@ -121,6 +138,8 @@ SDL_Surface* gfx_tex_load_tga_from_array(uint8_t* buffer)
     uint8_t tempColor[3];
     SDL_LockSurface(tempTexture);
     uint16_t* tempTexPtr = tempTexture->pixels;
+    int32_t texPitch = tempTexture->pitch >> 1;
+    if (texPitch <= 0) texPitch = tga_width;
     for(i = 0; i < (tga_width * tga_height); i++) 
     {
         tempColor[2] = buffer[bufIndex + 0];
@@ -133,7 +152,7 @@ SDL_Surface* gfx_tex_load_tga_from_array(uint8_t* buffer)
         else
             iNew = (tga_height - 1 - (i / tga_width)) * tga_width + i % tga_width;
 
-        tempTexPtr[iNew] = SDL_MapRGB(sdl_screen->format,tempColor[0], tempColor[1], tempColor[2]);
+        tempTexPtr[(iNew / tga_width) * texPitch + (iNew % tga_width)] = SDL_MapRGB(sdl_screen->format,tempColor[0], tempColor[1], tempColor[2]);
     }
     SDL_UnlockSurface(tempTexture);
     return tempTexture;

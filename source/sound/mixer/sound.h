@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
  *
- *  additionnal code by Eke-Eke (SMS Plus GX)
+ *  additional code by Eke-Eke (SMS Plus GX)
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -61,10 +72,11 @@ void psg_stereo_w(int32_t data);
 uint32_t fmunit_detect_r(void);
 void fmunit_detect_w(uint32_t data);
 void fmunit_write(uint32_t offset, uint8_t data);
-uint32_t SMSPLUS_sound_init(void);
-void SMSPLUS_sound_shutdown(void);
-void SMSPLUS_sound_reset(void);
-void SMSPLUS_sound_update(int32_t line);
-void SMSPLUS_sound_mixer_callback(int16_t *output, int32_t length);
+uint32_t MULTIREXZ80_sound_init(void);
+void MULTIREXZ80_sound_shutdown(void);
+void MULTIREXZ80_sound_reset(void);
+void MULTIREXZ80_sound_update(int32_t line);
+void MULTIREXZ80_sound_mixer_callback(int16_t *output, int32_t length);
+void MULTIREXZ80_snk_psychos_mixer_callback(int16_t *output, int32_t length);
 
 #endif /* SOUND_H_ */

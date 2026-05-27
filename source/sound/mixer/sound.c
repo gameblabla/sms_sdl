@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
  *
- *  additionnal code by Eke-Eke (SMS Plus GX)
+ *  additional code by Eke-Eke (SMS Plus GX)
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -45,6 +56,73 @@ static uint8_t systeme_dual_psg = 0;
 static uint8_t arcade_dual_psg = 0;
 static int16_t *systeme_psg2_stream[2] = { NULL, NULL };
 static sn76489_t systeme_psg2;
+
+typedef struct
+{
+	int32_t dc_x1;
+	int32_t dc_y1;
+	int32_t hp_alpha_q15;
+	int32_t hp_hz;
+	int32_t lp_y[3];
+	int32_t lp_alpha_q15;
+	int32_t lp_hz;
+	int32_t rate;
+} snk_audio_filter_t;
+
+static snk_audio_filter_t snk_audio_filter;
+
+static void snk_audio_filter_reset(void)
+{
+	memset(&snk_audio_filter, 0, sizeof(snk_audio_filter));
+}
+
+static void snk_audio_filter_update(void)
+{
+	int32_t hz = option.audio_lowpass_hz;
+	int32_t hp_hz = option.audio_highpass_hz;
+	int32_t rate = snd.sample_rate ? snd.sample_rate : SOUND_FREQUENCY;
+
+	if (hz < 0) hz = 0;
+	if (hz > rate / 2) hz = rate / 2;
+	if (hp_hz < 0) hp_hz = 0;
+	if (hp_hz > rate / 2) hp_hz = rate / 2;
+	if (snk_audio_filter.lp_hz == hz && snk_audio_filter.hp_hz == hp_hz && snk_audio_filter.rate == rate)
+		return;
+
+	snk_audio_filter.lp_hz = hz;
+	snk_audio_filter.hp_hz = hp_hz;
+	snk_audio_filter.rate = rate;
+	if (hp_hz > 0)
+	{
+		const double rc = (double)rate;
+		const double omega = 6.28318530717958647692 * (double)hp_hz;
+		int32_t alpha = (int32_t)((rc / (omega + rc)) * 32768.0 + 0.5);
+		if (alpha < 1) alpha = 1;
+		if (alpha > 32767) alpha = 32767;
+		snk_audio_filter.hp_alpha_q15 = alpha;
+	}
+	else
+	{
+		snk_audio_filter.hp_alpha_q15 = 0;
+	}
+
+	if (hz > 0)
+	{
+		const double rc = (double)rate;
+		const double omega = 6.28318530717958647692 * (double)hz;
+		int32_t alpha = (int32_t)((omega / (omega + rc)) * 32768.0 + 0.5);
+		if (alpha < 1) alpha = 1;
+		if (alpha > 32768) alpha = 32768;
+		snk_audio_filter.lp_alpha_q15 = alpha;
+	}
+	else
+	{
+		snk_audio_filter.lp_alpha_q15 = 0;
+		snk_audio_filter.lp_y[0] = 0;
+		snk_audio_filter.lp_y[1] = 0;
+		snk_audio_filter.lp_y[2] = 0;
+	}
+}
 
 static int16_t mix_saturate_i16(int32_t v)
 {
@@ -127,7 +205,7 @@ static void systeme_mix_second_psg(int16_t **dst, int32_t start, int32_t length)
 	}
 }
 
-uint32_t SMSPLUS_sound_init(void)
+uint32_t MULTIREXZ80_sound_init(void)
 {
 	static uint8_t *fmbuf = NULL;
 	static uint8_t *psgbuf = NULL;
@@ -157,7 +235,7 @@ uint32_t SMSPLUS_sound_init(void)
 		FM_GetContext(fmbuf);
 		
 		/* If we are reinitializing, shut down sound emulation */
-		SMSPLUS_sound_shutdown();
+		MULTIREXZ80_sound_shutdown();
 	}
 	
 	/* Disable sound until initialization is complete */
@@ -169,7 +247,10 @@ uint32_t SMSPLUS_sound_init(void)
 
 	/* Assign stream mixing callback if none provided */
 	if(!snd.mixer_callback)
-		snd.mixer_callback = SMSPLUS_sound_mixer_callback;
+		snd.mixer_callback = MULTIREXZ80_sound_mixer_callback;
+	if(sms.console == CONSOLE_SNKPSYCHOS)
+		snd.mixer_callback = MULTIREXZ80_snk_psychos_mixer_callback;
+	snk_audio_filter_reset();
 
 	/* Calculate number of samples generated per frame */
 	snd.sample_count = (snd.sample_rate / snd.fps);
@@ -265,7 +346,7 @@ uint32_t SMSPLUS_sound_init(void)
 }
 
 
-void SMSPLUS_sound_shutdown(void)
+void MULTIREXZ80_sound_shutdown(void)
 {
 	uint32_t i;
 	
@@ -313,7 +394,7 @@ void SMSPLUS_sound_shutdown(void)
 }
 
 
-void SMSPLUS_sound_reset(void)
+void MULTIREXZ80_sound_reset(void)
 {
 	if(!snd.enabled)
 		return;
@@ -326,10 +407,11 @@ void SMSPLUS_sound_reset(void)
 	FM_Reset();
 	if (sms.console == CONSOLE_SNKPSYCHOS)
 		snk_psychos_sound_reset();
+	snk_audio_filter_reset();
 }
 
 
-void SMSPLUS_sound_update(int32_t line)
+void MULTIREXZ80_sound_update(int32_t line)
 {
 	int16_t *fm[2], *psg[2];
 
@@ -396,7 +478,7 @@ void SMSPLUS_sound_update(int32_t line)
 }
 
 /* Generic FM+PSG stereo mixer callback */
-void SMSPLUS_sound_mixer_callback(int16_t *output, int32_t length)
+void MULTIREXZ80_sound_mixer_callback(int16_t *output, int32_t length)
 {
 	int32_t i;
 	int32_t level = option.soundlevel ? option.soundlevel : 1;
@@ -409,13 +491,65 @@ void SMSPLUS_sound_mixer_callback(int16_t *output, int32_t length)
 	}
 }
 
+void MULTIREXZ80_snk_psychos_mixer_callback(int16_t *output, int32_t length)
+{
+	int32_t i;
+	int32_t level = option.soundlevel ? option.soundlevel : 1;
+	int32_t gain_num = 1024; /* Match the old double-output loudness at 0 dB headroom. */
+
+	if (option.audio_headroom_db <= 0) gain_num = 1024;
+	else if (option.audio_headroom_db <= 3) gain_num = 724;
+	else if (option.audio_headroom_db <= 6) gain_num = 512;
+	else gain_num = 362;
+
+	snk_audio_filter_update();
+
+	for(i = 0; i < length; i++)
+	{
+		int32_t v = ((int32_t)fm_buffer[0][i] + (int32_t)fm_buffer[1][i]) * gain_num / 512;
+
+		if (option.audio_dc_blocker)
+		{
+			int32_t alpha = snk_audio_filter.hp_alpha_q15 ? snk_audio_filter.hp_alpha_q15 : 32604;
+			int64_t y = ((int64_t)alpha * ((int64_t)snk_audio_filter.dc_y1 + v - snk_audio_filter.dc_x1)) >> 15;
+			if (y > 131071) y = 131071;
+			if (y < -131072) y = -131072;
+			snk_audio_filter.dc_x1 = v;
+			snk_audio_filter.dc_y1 = (int32_t)y;
+			v = (int32_t)y;
+		}
+
+		if (snk_audio_filter.lp_alpha_q15)
+		{
+			snk_audio_filter.lp_y[0] += (int32_t)(((int64_t)snk_audio_filter.lp_alpha_q15 * (v - snk_audio_filter.lp_y[0])) >> 15);
+			snk_audio_filter.lp_y[1] += (int32_t)(((int64_t)snk_audio_filter.lp_alpha_q15 * (snk_audio_filter.lp_y[0] - snk_audio_filter.lp_y[1])) >> 15);
+			snk_audio_filter.lp_y[2] += (int32_t)(((int64_t)snk_audio_filter.lp_alpha_q15 * (snk_audio_filter.lp_y[1] - snk_audio_filter.lp_y[2])) >> 15);
+			v = snk_audio_filter.lp_y[2];
+		}
+
+		if (option.audio_highpass_hz || option.audio_lowpass_hz)
+			v <<= 2;
+
+		v *= level;
+
+		if (option.audio_limiter)
+		{
+			const int32_t knee = 28672;
+			if (v > knee) v = knee + ((v - knee) >> 2);
+			else if (v < -knee) v = -knee + ((v + knee) >> 2);
+		}
+
+		output[i * 2] = output[i * 2 + 1] = mix_saturate_i16(v);
+	}
+}
+
 /*--------------------------------------------------------------------------*/
 /* Sound chip access handlers                                               */
 /*--------------------------------------------------------------------------*/
 
 void psg_stereo_w(int32_t data)
 {
-	SMSPLUS_TRACE_PSG_WRITE(0x0001, (uint8_t)data);
+	MULTIREXZ80_TRACE_PSG_WRITE(0x0001, (uint8_t)data);
 	/*if(!snd.enabled) return;*/
 	SN76489_GGStereoWrite(data);
 }
@@ -424,7 +558,7 @@ void psg_stereo_w(int32_t data)
 void psg_write_chip(int32_t chip, int32_t data)
 {
 	uint8_t target = (systeme_dual_psg && chip) ? 1 : 0;
-	SMSPLUS_TRACE_PSG_WRITE(target ? 0x0002 : 0x0000, (uint8_t)data);
+	MULTIREXZ80_TRACE_PSG_WRITE(target ? 0x0002 : 0x0000, (uint8_t)data);
 	/*if(!snd.enabled) return;*/
 	psg_write_backend(target, (uint8_t)data);
 }
@@ -445,14 +579,14 @@ uint32_t fmunit_detect_r(void)
 
 void fmunit_detect_w(uint32_t data)
 {
-	SMSPLUS_TRACE_YM_WRITE(0x00f2, (uint8_t)data);
+	MULTIREXZ80_TRACE_YM_WRITE(0x00f2, (uint8_t)data);
 	if(/* !snd.enabled || */ !sms.use_fm) return;
 	sms.fm_detect = data;
 }
 
 void fmunit_write(uint32_t offset, uint8_t data)
 {
-	SMSPLUS_TRACE_YM_WRITE((uint16_t)(0x00f0 | (offset & 1)), data);
+	MULTIREXZ80_TRACE_YM_WRITE((uint16_t)(0x00f0 | (offset & 1)), data);
 	if(/* !snd.enabled || */ !sms.use_fm) return;
 	FM_Write(offset, data);
 }

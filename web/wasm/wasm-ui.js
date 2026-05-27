@@ -11,7 +11,7 @@ const ARCADE = { COIN1:1, COIN2:2, SERVICE:4, TEST:8, START1:16, START2:32 };
 
 async function boot() {
   const imports = { env: { abort() { throw new Error('wasm abort'); } } };
-  const res = await WebAssembly.instantiateStreaming(fetch('smsplusgx.wasm'), imports);
+  const res = await WebAssembly.instantiateStreaming(fetch('multirexz80.wasm'), imports);
   wasm = res.instance.exports;
   memory = wasm.memory;
   wasm.wasm_core_init();
@@ -28,7 +28,7 @@ async function loadFile(f) {
   wasm.wasm_release(ptr);
   if (!ok) { setStatus(`Could not load ${f.name}. For raw clang/WASI builds, use an uncompressed ROM image or a natively supported archive.`); return; }
   loadedName = f.name;
-  const key = 'smsplusgx.sram.' + loadedName;
+  const key = 'multirexz80.sram.' + loadedName;
   const saved = localStorage.getItem(key);
   if (saved) loadSram(saved);
   setStatus(`${f.name} loaded. CRC ${wasm.wasm_crc().toString(16).padStart(8,'0').toUpperCase()}`);
@@ -42,7 +42,7 @@ function saveSram() {
   if (!loadedName) return;
   const bytes = new Uint8Array(memory.buffer, wasm.wasm_sram_ptr(), wasm.wasm_sram_size());
   let s = ''; for (const b of bytes) s += String.fromCharCode(b);
-  localStorage.setItem('smsplusgx.sram.' + loadedName, btoa(s));
+  localStorage.setItem('multirexz80.sram.' + loadedName, btoa(s));
   setStatus('SRAM saved to localStorage.');
 }
 
@@ -53,7 +53,7 @@ file.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.
 document.getElementById('pause').onclick = () => paused = !paused;
 document.getElementById('reset').onclick = () => wasm && wasm.wasm_reset();
 document.getElementById('save-sram').onclick = saveSram;
-document.getElementById('load-sram').onclick = () => { const s = localStorage.getItem('smsplusgx.sram.' + loadedName); if (s) loadSram(s); };
+document.getElementById('load-sram').onclick = () => { const s = localStorage.getItem('multirexz80.sram.' + loadedName); if (s) loadSram(s); };
 document.getElementById('scale').oninput = e => { canvas.style.width = `${256 * e.target.value}px`; };
 canvas.style.width = '768px';
 

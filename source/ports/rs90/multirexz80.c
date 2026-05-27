@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -9,15 +20,15 @@
 #include <SDL/SDL.h>
 #include "shared.h"
 #include "scaler.h"
-#include "smsplus.h"
+#include "multirexz80.h"
 #include "sdl12_common.h"
 #include "font_drawing.h"
 
-#ifdef NOYUV
-SDL_Color palette_8bpp[256];
-#else
-static uint8_t drm_palette[3][256];
+#ifndef SDL_TRIPLEBUF
+#define SDL_TRIPLEBUF SDL_DOUBLEBUF
 #endif
+
+#define SDL_FLAGS (SDL_HWSURFACE | SDL_TRIPLEBUF)
 
 static gamedata_t gdata;
 
@@ -31,149 +42,99 @@ static char home_path[256];
 static uint_fast8_t save_slot = 0;
 static uint_fast8_t quit = 0;
 
-#ifndef NOYUV
-#define UINT16_16(val) ((uint32_t)(val * (float)(1<<16)))
-static const uint32_t YUV_MAT[3][3] = {
-	{UINT16_16(0.2999f),   UINT16_16(0.587f),    UINT16_16(0.114f)},
-	{UINT16_16(0.168736f), UINT16_16(0.331264f), UINT16_16(0.5f)},
-	{UINT16_16(0.5f),      UINT16_16(0.418688f), UINT16_16(0.081312f)}
-};
-static uint8_t* dst_yuv[3];
-#endif
 
 static uint_fast8_t forcerefresh = 0;
 static uint32_t update_window_size(uint32_t w, uint32_t h);
 
-/* This is solely relying on the IPU chip implemented in the kernel
- * for centering, scaling (with bilinear filtering) etc...
-*/
+static int screen_w_remember = 0;
+static int screen_h_remember = 0;
+
 static void video_update(void)
 {
-	uint_fast16_t height, width;
-	uint_fast16_t i, pixels_shifting_remove;
-	uint_fast8_t a, plane;
-	
-	if (sms.console == CONSOLE_GG)
+	SDL_Rect src, dst;
+	multirexz80_sdl12_view_t view;
+	uint32_t target_w;
+	uint32_t target_h;
+	int locked = 0;
+	int screen_pitch;
+
+	multirexz80_sdl12_get_active_view(&view);
+
+	target_w = (option.fullscreen == 0) ? (uint32_t)view.w : HOST_WIDTH_RESOLUTION;
+	target_h = (option.fullscreen == 0) ? (uint32_t)view.h : HOST_HEIGHT_RESOLUTION;
+	if (target_h == 0) target_h = VIDEO_HEIGHT_SMS;
+
+	if (screen_w_remember != (int)target_w || screen_h_remember != (int)target_h || forcerefresh == 1)
 	{
-		/*	pixels_shifting_remove is used to skip the parts of the screen that we don't want.
-			This is much faster than copying it to another buffer.
-		*/
-		pixels_shifting_remove = (256 * 24) + 48;
-		height = 144;
-		width = 160;
-		if (sdl_screen->h != 144 || forcerefresh == 1)
-		{
-			update_window_size(160, 144);
-			forcerefresh = 0;
-		}
+		if (update_window_size(target_w, target_h))
+			return;
+		screen_w_remember = (int)target_w;
+		screen_h_remember = (int)target_h;
+		forcerefresh = 0;
+	}
+
+	src.x = (Sint16)view.x;
+	src.y = (Sint16)view.y;
+	src.w = (Uint16)view.w;
+	src.h = (Uint16)view.h;
+
+	SDL_FillRect(sdl_screen, NULL, 0);
+	if (option.fullscreen == 0)
+	{
+		dst.x = (Sint16)((sdl_screen->w - src.w) / 2);
+		dst.y = (Sint16)((sdl_screen->h - src.h) / 2);
+		if (dst.x < 0) dst.x = 0;
+		if (dst.y < 0) dst.y = 0;
+		SDL_BlitSurface(sms_bitmap, &src, sdl_screen, &dst);
 	}
 	else
 	{
-		pixels_shifting_remove = (vdp.reg[0] & 0x20) ? 8 : 0;
-		height = vdp.height;
-		width = 256 - pixels_shifting_remove;
-		if (width != sdl_screen->w || sdl_screen->h != vdp.height || forcerefresh == 1)
+		multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w, view.h);
+		if (SDL_MUSTLOCK(sdl_screen))
 		{
-			update_window_size(width, vdp.height);
-			forcerefresh = 0;
-		}
-	}
-	
-	/* Yes, this mess is really for the 8-bits palette mode.*/
-	if (bitmap.pal.update == 1){
-		for(i = 0; i < PALETTE_SIZE; i += 1)
-		{
-			if(bitmap.pal.dirty[i])
+			if (SDL_LockSurface(sdl_screen) < 0)
 			{
-				for(a=0;a<8;a++)
-				{
-					#ifdef NOYUV
-					palette_8bpp[i+(a*32)].r = (bitmap.pal.color[i][0]);
-					palette_8bpp[i+(a*32)].g = (bitmap.pal.color[i][1]);
-					palette_8bpp[i+(a*32)].b = (bitmap.pal.color[i][2]);
-					#else
-					/* Set DRM palette */
-					drm_palette[0][i+(a*32)] = ( ( UINT16_16(  0) + YUV_MAT[0][0] * bitmap.pal.color[i][0] + YUV_MAT[0][1] * bitmap.pal.color[i][1] + YUV_MAT[0][2] * bitmap.pal.color[i][2]) >> 16 );
-					drm_palette[1][i+(a*32)] = ( ( UINT16_16(128) - YUV_MAT[1][0] * bitmap.pal.color[i][0] - YUV_MAT[1][1] * bitmap.pal.color[i][1] + YUV_MAT[1][2] * bitmap.pal.color[i][2]) >> 16 );
-					drm_palette[2][i+(a*32)] = ( ( UINT16_16(128) + YUV_MAT[2][0] * bitmap.pal.color[i][0] - YUV_MAT[2][1] * bitmap.pal.color[i][1] - YUV_MAT[2][2] * bitmap.pal.color[i][2]) >> 16 );
-					#endif
-				}
+				SDL_Flip(sdl_screen);
+				return;
 			}
+			locked = 1;
 		}
-		#ifdef NOYUV
-		SDL_SetPalette(sms_bitmap, SDL_LOGPAL|SDL_PHYSPAL, palette_8bpp, 0, 256);
-		SDL_SetPalette(sdl_screen, SDL_LOGPAL|SDL_PHYSPAL, palette_8bpp, 0, 256);
-		#endif
+		screen_pitch = multirexz80_sdl12_surface_pitch_pixels(sdl_screen);
+		if (screen_pitch <= 0) screen_pitch = sdl_screen->w;
+		bitmap_scale(view.x, view.y, view.w, view.h, dst.w, dst.h,
+		             view.pitch_pixels, screen_pitch - dst.w,
+		             (uint16_t * restrict)sms_bitmap->pixels,
+		             (uint16_t * restrict)sdl_screen->pixels + dst.x + dst.y * screen_pitch);
+		if (locked) SDL_UnlockSurface(sdl_screen);
 	}
-	
-	#ifdef NOYUV
-	if (pixels_shifting_remove) sms_bitmap->pixels += pixels_shifting_remove;
-	SDL_BlitSurface(sms_bitmap, NULL, sdl_screen, NULL);
-	if (pixels_shifting_remove) sms_bitmap->pixels -= pixels_shifting_remove;
-	#else
-	
-	/* This code is courtesy of Slaneesh. Many thanks to him for the help and special thanks also to Johnny too. 
-	 * However Johnny's code is not used because during my testing it was slower.
-	 * He still helped me understand the YUV code though, so thanks.
-	 * */
-	uint8_t *srcbase = sms_bitmap->pixels + pixels_shifting_remove;
-	dst_yuv[0] = sdl_screen->pixels;
-	dst_yuv[1] = dst_yuv[0] + height * sdl_screen->pitch;
-	dst_yuv[2] = dst_yuv[1] + height * sdl_screen->pitch;
-    for (plane=0; plane<3; plane++) /* The three Y, U and V planes */
-    {
-        uint32_t y;
-        register uint8_t *pal = drm_palette[plane];
-        for (y=0; y < height; y++)   /* The number of lines to copy */
-        {
-            register uint8_t *src = srcbase + (y*sms_bitmap->w);
-            register uint8_t *end = src + width;
-            register uint32_t *dst = (uint32_t *)&dst_yuv[plane][width * y];
-
-             __builtin_prefetch(pal, 0, 1 );
-             __builtin_prefetch(src, 0, 1 );
-             __builtin_prefetch(dst, 1, 0 );
-
-            while (src < end)       /* The actual line data to copy */
-            {
-                register uint32_t pix;
-                pix  = pal[*src++];
-                pix |= (pal[*src++])<<8;
-                pix |= (pal[*src++])<<16;
-                pix |= (pal[*src++])<<24;
-                *dst++ = pix;
-            }
-        }
-    }
-	#endif
 	SDL_Flip(sdl_screen);
 }
 
 
 void smsp_state(uint8_t slot_number, uint8_t mode)
 {
-	smsplus_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
+	multirexz80_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
 }
 
 void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
 {
 	(void)slot_number;
-	smsplus_sdl12_sram_file(gdata.sramfile, sram, mode);
+	multirexz80_sdl12_sram_file(gdata.sramfile, sram, mode);
 }
 
 static uint32_t sdl_controls_update_input_down(SDLKey k)
 {
-	smsplus_sdl12_keymap_t map;
-	smsplus_sdl12_keymap_from_config(&map, option.config_buttons);
-	return smsplus_sdl12_update_key(k, 1, &map, NULL);
+	multirexz80_sdl12_keymap_t map;
+	multirexz80_sdl12_keymap_from_config(&map, option.config_buttons);
+	return multirexz80_sdl12_update_key(k, 1, &map, NULL);
 }
 
 
 static uint32_t sdl_controls_update_input_release(SDLKey k)
 {
-	smsplus_sdl12_keymap_t map;
-	smsplus_sdl12_keymap_from_config(&map, option.config_buttons);
-	return smsplus_sdl12_update_key(k, 0, &map, NULL);
+	multirexz80_sdl12_keymap_t map;
+	multirexz80_sdl12_keymap_from_config(&map, option.config_buttons);
+	return multirexz80_sdl12_update_key(k, 0, &map, NULL);
 }
 
 
@@ -216,7 +177,7 @@ static void smsp_gamedata_set(char *filename)
 {
 	unsigned long i;
 	// Set paths, create directories
-	snprintf(home_path, sizeof(home_path), "%s/.smsplus/", getenv("HOME"));
+	snprintf(home_path, sizeof(home_path), "%s/.multirexz80/", getenv("HOME"));
 	
 	if (mkdir(home_path, 0755) && errno != EEXIST) {
 		fprintf(stderr, "Failed to create %s: %d\n", home_path, errno);
@@ -508,8 +469,11 @@ static void Menu()
     int16_t currentselection = 1;
     SDL_Event Event;
     
-    sdl_screen = SDL_SetVideoMode(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, SDL_SWSURFACE);
-    
+    update_window_size(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION);
+    screen_w_remember = HOST_WIDTH_RESOLUTION;
+    screen_h_remember = HOST_HEIGHT_RESOLUTION;
+    font_drawing_set_target((uint16_t *)backbuffer->pixels, backbuffer->pitch >> 1, backbuffer->w, backbuffer->h);
+
 	Sound_Pause();
     
     while (((currentselection != 1) && (currentselection != 7)) || (!pressed))
@@ -517,7 +481,7 @@ static void Menu()
         pressed = 0;
  		SDL_FillRect( backbuffer, NULL, 0 );
 
-		print_string("SMS Plus GX", TextWhite, 0, 72, 15, backbuffer->pixels);
+		print_string("MultiRexZ80", TextWhite, 0, 72, 15, backbuffer->pixels);
 		
 		if (currentselection == 1) print_string("Continue", TextBlue, 0, 5, 27, backbuffer->pixels);
 		else  print_string("Continue", TextWhite, 0, 5, 27, backbuffer->pixels);
@@ -723,12 +687,19 @@ static void Cleanup(void)
 
 uint32_t update_window_size(uint32_t w, uint32_t h)
 {
-	if (h == 0) h = 192;
-#ifdef NOYUV
-	sdl_screen = SDL_SetVideoMode(w, h, 8, SDL_HWSURFACE | SDL_TRIPLEBUF | SDL_HWPALETTE);
-#else
-	sdl_screen = SDL_SetVideoMode(w, h, 24, SDL_HWSURFACE | SDL_TRIPLEBUF | SDL_YUV444 | SDL_ANYFORMAT | SDL_FULLSCREEN);
-#endif
+	if (w == 0) w = VIDEO_WIDTH_SMS;
+	if (h == 0) h = VIDEO_HEIGHT_SMS;
+
+	/* Upstream RS-90 SDL now handles panel scaling for normal 16-bpp modes.
+	 * Keep this path like the GCW0/OpenDingux backend: request an RGB565
+	 * surface at the desired active output size and render into it. */
+	sdl_screen = SDL_SetVideoMode((int)w, (int)h, 16, SDL_FLAGS);
+	if (!sdl_screen)
+	{
+		fprintf(stderr, "SDL_SetVideoMode Initialisation error : %s\n", SDL_GetError());
+		fprintf(stderr, "Width %u, Height %u, FLAGS 0x%x\n", w, h, SDL_FLAGS);
+		return 1;
+	}
 	return 0;
 }
 
@@ -739,7 +710,7 @@ int main (int argc, char *argv[])
 	
 	if(argc < 2) 
 	{
-		fprintf(stderr, "Usage: ./smsplus [FILE]\n");
+		fprintf(stderr, "Usage: ./multirexz80 [FILE]\n");
 		return 0;
 	}
 	
@@ -747,6 +718,7 @@ int main (int argc, char *argv[])
 	
 	memset(&option, 0, sizeof(option));
 	
+	option.fullscreen = 1;
 	option.fm = 1;
 	option.spritelimit = 1;
 	option.tms_pal = 2;
@@ -755,6 +727,9 @@ int main (int argc, char *argv[])
 	option.soundlevel = 2;
 	
 	config_load();
+	/* RS-90 has no display-mode menu; ignore stale saved values and always
+	 * use the 240x160 panel-sized output path. */
+	option.fullscreen = 1;
 
 	option.console = 0;
 	
@@ -784,14 +759,15 @@ int main (int argc, char *argv[])
 
 	SDL_Init(SDL_INIT_VIDEO);
 	SDL_ShowCursor(0);
-	if (update_window_size(VIDEO_WIDTH_SMS, 240))
+	if (update_window_size(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION))
 	{
 		fprintf(stdout, "Could not create display, exiting\n");	
 		Cleanup();
 		return 0;
 	}
-	backbuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, 0, 0, 0, 0);
-	sms_bitmap = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_WIDTH_SMS, 267, 8, 0, 0, 0, 0);
+	backbuffer = multirexz80_sdl12_create_rgb565_surface(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION);
+	font_drawing_set_target((uint16_t *)backbuffer->pixels, backbuffer->pitch >> 1, backbuffer->w, backbuffer->h);
+	sms_bitmap = multirexz80_sdl12_create_rgb565_surface(multirexz80_sdl12_bitmap_width(), multirexz80_sdl12_bitmap_height());
 	
 	SDL_FillRect(sms_bitmap, NULL, 0 );
 	for(i=0;i<3;i++)
@@ -802,9 +778,9 @@ int main (int argc, char *argv[])
 	fprintf(stdout, "CRC : %08X\n", cart.crc);
 	
 	// Set parameters for internal bitmap
-	bitmap.width = VIDEO_WIDTH_SMS;
+	bitmap.width = sms_bitmap->w;
 	bitmap.height = sms_bitmap->h;
-	bitmap.depth = 8;
+	bitmap.depth = 16;
 	bitmap.data = (uint8_t *)sms_bitmap->pixels;
 	bitmap.pitch = sms_bitmap->pitch;
 	bitmap.viewport.w = VIDEO_WIDTH_SMS;
@@ -825,26 +801,6 @@ int main (int argc, char *argv[])
 	
 	Sound_Init();
 	
-	for(i = 0; i < PALETTE_SIZE; i += 1)
-	{
-		if(bitmap.pal.dirty[i])
-		{
-			#ifdef NOYUV
-			palette_8bpp[i].r = 0;
-			palette_8bpp[i].g = 0;
-			palette_8bpp[i].b = 0;
-			#else
-			drm_palette[0][i] = 0;
-			drm_palette[1][i] = 0;
-			drm_palette[2][i] = 0;
-			#endif
-		}
-	}
-	
-#ifdef NOYUV
-	SDL_SetPalette(sms_bitmap, SDL_LOGPAL|SDL_PHYSPAL, palette_8bpp, 0, 256);
-#endif
-
 	forcerefresh = 1;
 	
 	// Loop until the user closes the window
@@ -872,7 +828,7 @@ int main (int argc, char *argv[])
 			}
 		}
 
-		smsplus_sdl12_frame_update();
+		multirexz80_sdl12_frame_update();
 
 		// Execute frame(s)
 		system_frame(0);

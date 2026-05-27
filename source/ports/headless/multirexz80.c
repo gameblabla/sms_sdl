@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,7 +42,7 @@ typedef struct cli_options
     uint8_t force_lightgun;
     int32_t lightgun_x;
     int32_t lightgun_y;
-    smsplus_headless_platform_options_t platform;
+    multirexz80_headless_platform_options_t platform;
 } cli_options_t;
 
 static void usage(const char *argv0)
@@ -39,7 +50,7 @@ static void usage(const char *argv0)
     fprintf(stderr,
         "Usage: %s [options] ROM\n"
         "\n"
-        "Headless SMS Plus GX runner. No SDL, video display, or host audio backend is used.\n"
+        "Headless MultiRexZ80 runner. No SDL, video display, or host audio backend is used.\n"
         "\n"
         "Core options:\n"
         "  --frames N                 Run N frames (default: 300)\n"
@@ -335,14 +346,14 @@ void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
 
 static int init_bitmap(void)
 {
-    size_t bytes = (size_t)HEADLESS_BITMAP_WIDTH * HEADLESS_BITMAP_HEIGHT * SMSPLUS_RENDER_BYTES_PER_PIXEL;
+    size_t bytes = (size_t)HEADLESS_BITMAP_WIDTH * HEADLESS_BITMAP_HEIGHT * MULTIREXZ80_RENDER_BYTES_PER_PIXEL;
     headless_pixels = calloc(1, bytes);
     if (!headless_pixels) return 0;
     bitmap.width = HEADLESS_BITMAP_WIDTH;
     bitmap.height = HEADLESS_BITMAP_HEIGHT;
-    bitmap.depth = SMSPLUS_RENDER_DEPTH;
+    bitmap.depth = MULTIREXZ80_RENDER_DEPTH;
     bitmap.data = (uint8_t *)(void *)headless_pixels;
-    bitmap.pitch = HEADLESS_BITMAP_WIDTH * SMSPLUS_RENDER_BYTES_PER_PIXEL;
+    bitmap.pitch = HEADLESS_BITMAP_WIDTH * MULTIREXZ80_RENDER_BYTES_PER_PIXEL;
     bitmap.viewport.w = VIDEO_WIDTH_SMS;
     bitmap.viewport.h = VIDEO_HEIGHT_SMS;
     bitmap.viewport.x = 0;
@@ -355,7 +366,7 @@ static uint32_t headless_read_xrgb8888(uint32_t x, uint32_t y)
 {
     if (!bitmap.data || x >= bitmap.width || y >= bitmap.height)
         return 0xff000000u;
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
     return ((const uint32_t *)(const void *)(bitmap.data + (size_t)y * bitmap.pitch))[x] | 0xff000000u;
 #else
     {
@@ -442,8 +453,8 @@ int main(int argc, char **argv)
     input.analog[0][0] = cli.lightgun_x;
     input.analog[0][1] = cli.lightgun_y;
 
-    smsplus_headless_platform_t *platform = NULL;
-    if (!smsplus_headless_platform_create(&platform, &cli.platform))
+    multirexz80_headless_platform_t *platform = NULL;
+    if (!multirexz80_headless_platform_create(&platform, &cli.platform))
     {
         fprintf(stderr, "Failed to initialize headless inspection outputs.\n");
         cleanup();
@@ -462,13 +473,13 @@ int main(int argc, char **argv)
     int ok = 1;
     for (uint64_t frame = 0; frame < cli.frames; frame++)
     {
-        if (!smsplus_headless_platform_begin_frame(platform, frame)) { ok = 0; break; }
+        if (!multirexz80_headless_platform_begin_frame(platform, frame)) { ok = 0; break; }
         system_frame(cli.skip_render);
-        if (!smsplus_headless_platform_end_frame(platform, frame)) { ok = 0; break; }
+        if (!multirexz80_headless_platform_end_frame(platform, frame)) { ok = 0; break; }
     }
 
     if (ok)
-        ok = smsplus_headless_platform_save_final(platform, cli.frames);
+        ok = multirexz80_headless_platform_save_final(platform, cli.frames);
 
     if (ok && cli.save_state_path)
     {
@@ -482,7 +493,7 @@ int main(int argc, char **argv)
         free(thumb);
     }
 
-    smsplus_headless_platform_destroy(platform);
+    multirexz80_headless_platform_destroy(platform);
     cleanup();
 
     return ok ? 0 : 1;

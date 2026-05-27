@@ -1,5 +1,16 @@
 /*
- * SNK Psycho Soldier hardware support for SMS Plus GX.
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+/*
+ * SNK Psycho Soldier hardware support for MultiRexZ80.
  *
  * This is an independent compact C implementation for the SNK triple-Z80 boards
  * used by Psycho Soldier, Athena and Ikari Warriors.  Hardware maps, ROM layout, input ports and video
@@ -75,6 +86,7 @@
 #define SNK_SOUND_CMD_IRQ   0x08u
 
 #define SNK_OPL_CLOCK       4000000u
+#define SNK_OPL_NATIVE_RATE (SNK_OPL_CLOCK / 72u)
 
 typedef struct
 {
@@ -122,6 +134,12 @@ typedef struct
     uint8_t ym2_addr;
     opl_chip_t *ym[2];
     uint32_t ym_sample_rate;
+    uint32_t ym_output_rate;
+    uint32_t ym_resample_step;
+    uint32_t ym_resample_phase;
+    uint32_t ym_resample_count;
+    int16_t *ym_resample_tmp[2];
+    uint32_t ym_resample_capacity;
 
     uint16_t bg_scrollx;
     uint16_t bg_scrolly;
@@ -449,9 +467,18 @@ static void snk_psychos_sound_destroy_chips(void)
 {
     OPL_Destroy(snk.ym[0]);
     OPL_Destroy(snk.ym[1]);
+    free(snk.ym_resample_tmp[0]);
+    free(snk.ym_resample_tmp[1]);
     snk.ym[0] = NULL;
     snk.ym[1] = NULL;
+    snk.ym_resample_tmp[0] = NULL;
+    snk.ym_resample_tmp[1] = NULL;
+    snk.ym_resample_capacity = 0;
     snk.ym_sample_rate = 0;
+    snk.ym_output_rate = 0;
+    snk.ym_resample_step = 0;
+    snk.ym_resample_phase = 0;
+    snk.ym_resample_count = 0;
 }
 
 static void snk_ym_irq_callback(void *opaque, int state)
@@ -466,14 +493,17 @@ static void snk_ym_irq_callback(void *opaque, int state)
 
 static void snk_psychos_sound_ensure_chips(void)
 {
-    uint32_t rate = snd.sample_rate ? (uint32_t)snd.sample_rate : 44100u;
-    if (snk.ym[0] && snk.ym[1] && snk.ym_sample_rate == rate)
+    uint32_t out_rate = snd.sample_rate ? (uint32_t)snd.sample_rate : 44100u;
+    uint32_t chip_rate = SNK_OPL_NATIVE_RATE;
+    if (snk.ym[0] && snk.ym[1] && snk.ym_sample_rate == chip_rate && snk.ym_output_rate == out_rate)
         return;
 
     snk_psychos_sound_destroy_chips();
-    snk.ym_sample_rate = rate;
-    snk.ym[0] = OPL_Create(OPL_CHIP_YM3526, SNK_OPL_CLOCK, rate);
-    snk.ym[1] = OPL_Create(snk_uses_two_ym3526() ? OPL_CHIP_YM3526 : OPL_CHIP_Y8950, SNK_OPL_CLOCK, rate);
+    snk.ym_sample_rate = chip_rate;
+    snk.ym_output_rate = out_rate;
+    snk.ym_resample_step = (uint32_t)(((uint64_t)chip_rate << 16) / out_rate);
+    snk.ym[0] = OPL_Create(OPL_CHIP_YM3526, SNK_OPL_CLOCK, chip_rate);
+    snk.ym[1] = OPL_Create(snk_uses_two_ym3526() ? OPL_CHIP_YM3526 : OPL_CHIP_Y8950, SNK_OPL_CLOCK, chip_rate);
     if (snk.ym[0])
         OPL_SetIRQHandler(snk.ym[0], snk_ym_irq_callback, (void *)(uintptr_t)0);
     if (snk.ym[1])
@@ -519,12 +549,12 @@ static void snk_ym_write(int chip, uint8_t offset, uint8_t data)
     if (!(offset & 1))
     {
         *addr = data;
-        SMSPLUS_TRACE_YM_WRITE((uint16_t)(chip ? 0xf000 : 0xe800), data);
+        MULTIREXZ80_TRACE_YM_WRITE((uint16_t)(chip ? 0xf000 : 0xe800), data);
     }
     else
     {
         reg = *addr;
-        SMSPLUS_TRACE_YM_WRITE((uint16_t)((chip ? 0xf400 : 0xec00) | reg), data);
+        MULTIREXZ80_TRACE_YM_WRITE((uint16_t)((chip ? 0xf400 : 0xec00) | reg), data);
     }
 
     if (snk.ym[chip])
@@ -540,12 +570,36 @@ void snk_psychos_sound_reset(void)
     if (snk.ym[1] && !snk_uses_two_ym3526())
         OPL_SetADPCMROM(snk.ym[1], snk.ym2_rom, SNK_YM2_SIZE);
     snk.ym1_addr = snk.ym2_addr = 0;
+    snk.ym_resample_phase = 0;
+    snk.ym_resample_count = 0;
     snk.sound_status &= (uint8_t)~(SNK_SOUND_YM1_IRQ | SNK_SOUND_YM2_IRQ);
     snk_sound_update_irq();
 }
 
+static int snk_psychos_sound_ensure_resample_tmp(uint32_t samples)
+{
+    int i;
+    if (samples <= snk.ym_resample_capacity)
+        return 1;
+
+    for (i = 0; i < 2; i++)
+    {
+        int16_t *p = (int16_t *)realloc(snk.ym_resample_tmp[i], (size_t)samples * sizeof(int16_t));
+        if (!p)
+            return 0;
+        snk.ym_resample_tmp[i] = p;
+    }
+    snk.ym_resample_capacity = samples;
+    return 1;
+}
+
 void snk_psychos_sound_update(int16_t **buffer, int32_t length)
 {
+    uint32_t needed_index;
+    uint32_t needed_count;
+    uint32_t generate_count;
+    uint32_t final_phase;
+    uint32_t drop;
     int32_t i;
     if (!buffer || !buffer[0] || !buffer[1] || length <= 0) return;
     snk_psychos_sound_ensure_chips();
@@ -557,17 +611,53 @@ void snk_psychos_sound_update(int16_t **buffer, int32_t length)
         return;
     }
 
-    OPL_UpdateMono(snk.ym[0], buffer[0], length);
-    OPL_UpdateMono(snk.ym[1], buffer[1], length);
+    needed_index = (snk.ym_resample_phase + (uint32_t)((uint64_t)(length - 1) * snk.ym_resample_step)) >> 16;
+    needed_count = needed_index + 2u;
+
+    if (!snk_psychos_sound_ensure_resample_tmp(needed_count))
+    {
+        memset(buffer[0], 0, (size_t)length * sizeof(int16_t));
+        memset(buffer[1], 0, (size_t)length * sizeof(int16_t));
+        return;
+    }
+
+    if (snk.ym_resample_count < needed_count)
+    {
+        generate_count = needed_count - snk.ym_resample_count;
+        OPL_UpdateMono(snk.ym[0], snk.ym_resample_tmp[0] + snk.ym_resample_count, (int32_t)generate_count);
+        OPL_UpdateMono(snk.ym[1], snk.ym_resample_tmp[1] + snk.ym_resample_count, (int32_t)generate_count);
+        snk.ym_resample_count = needed_count;
+    }
 
     for (i = 0; i < length; i++)
     {
-        int32_t v = (int32_t)buffer[0][i] + (int32_t)buffer[1][i];
-        if (v > 32767) v = 32767;
-        if (v < -32768) v = -32768;
-        buffer[0][i] = (int16_t)v;
-        buffer[1][i] = (int16_t)v;
+        uint32_t pos = snk.ym_resample_phase + (uint32_t)((uint64_t)i * snk.ym_resample_step);
+        uint32_t idx = pos >> 16;
+        uint32_t frac = pos & 0xffffu;
+        int32_t a0 = snk.ym_resample_tmp[0][idx];
+        int32_t b0 = snk.ym_resample_tmp[0][idx + 1u];
+        int32_t a1 = snk.ym_resample_tmp[1][idx];
+        int32_t b1 = snk.ym_resample_tmp[1][idx + 1u];
+        buffer[0][i] = (int16_t)(a0 + (int32_t)(((int64_t)(b0 - a0) * frac) >> 16));
+        buffer[1][i] = (int16_t)(a1 + (int32_t)(((int64_t)(b1 - a1) * frac) >> 16));
     }
+
+    final_phase = snk.ym_resample_phase + (uint32_t)((uint64_t)length * snk.ym_resample_step);
+    drop = final_phase >> 16;
+    if (drop > 0)
+    {
+        if (drop >= snk.ym_resample_count)
+        {
+            snk.ym_resample_count = 0;
+        }
+        else
+        {
+            snk.ym_resample_count -= drop;
+            memmove(snk.ym_resample_tmp[0], snk.ym_resample_tmp[0] + drop, (size_t)snk.ym_resample_count * sizeof(int16_t));
+            memmove(snk.ym_resample_tmp[1], snk.ym_resample_tmp[1] + drop, (size_t)snk.ym_resample_count * sizeof(int16_t));
+        }
+    }
+    snk.ym_resample_phase = final_phase & 0xffffu;
 }
 
 static void snk_map_cpu(int which)
@@ -676,6 +766,395 @@ static int32_t snk_irq_callback(int32_t param)
     (void)param;
     z80_set_irq_line(INPUT_LINE_IRQ0, CLEAR_LINE);
     return 0xff;
+}
+
+
+#define SNK_PSYCHOS_STATE_MAGIC   0x53504b53u /* "SKPS" as a native-endian guard. */
+#define SNK_PSYCHOS_STATE_VERSION 2u
+#define SNK_PSYCHOS_STATE_MIN_VERSION 1u
+
+typedef struct
+{
+    uint32_t pc, sp, af, bc, de, hl, ix, iy, wz;
+    uint32_t af2, bc2, de2, hl2;
+    uint32_t prvpc;
+    uint8_t r, r2, iff1, iff2, halt, im, i;
+    uint8_t after_ei, after_ldair;
+    uint16_t ea;
+    int32_t nmi_state;
+    int32_t nmi_pending;
+    int32_t irq_state;
+    int32_t icount;
+    int32_t wait_state;
+    int32_t busrq_state;
+    int32_t cycles;
+} snk_z80_state_file_t;
+
+
+#define SNK_PSYCHOS_SOUND_STATE_MAGIC   0x32444e53u /* "SND2" native-endian */
+#define SNK_PSYCHOS_SOUND_STATE_VERSION 1u
+
+typedef struct
+{
+    uint32_t magic;
+    uint32_t version;
+    uint32_t size;
+    uint32_t ym_size[2];
+} snk_psychos_sound_state_file_t;
+
+typedef struct
+{
+    uint32_t magic;
+    uint32_t version;
+    uint32_t size;
+    uint8_t current_cpu;
+    uint8_t active;
+    uint8_t athena_main_ramtest_done;
+    uint8_t sound_latch;
+    uint8_t sound_status;
+    uint8_t sound_irq_pending;
+    uint8_t ym1_addr;
+    uint8_t ym2_addr;
+    uint16_t bg_scrollx;
+    uint16_t bg_scrolly;
+    uint16_t sp16_scrollx;
+    uint16_t sp16_scrolly;
+    uint16_t sp32_scrollx;
+    uint16_t sp32_scrolly;
+    uint8_t sprite_split;
+    uint8_t video_attr;
+    uint16_t tx_tile_offset;
+    uint16_t tx_palette_offset;
+    uint16_t bg_palette_offset;
+    uint16_t hf_posx;
+    uint16_t hf_posy;
+    uint8_t dsw1;
+    uint8_t dsw2;
+    uint8_t game_type;
+    uint8_t rotate;
+    uint8_t sprite_bpp;
+    uint16_t screen_w;
+    uint16_t screen_h;
+    uint16_t crop_x;
+    uint16_t crop_y;
+    uint16_t crop_w;
+    uint16_t crop_h;
+    uint8_t tx_cols;
+    uint8_t tx_rows;
+    uint8_t tx_scroll_y;
+    int16_t bg_scrolldx;
+    int16_t bg_scrolldy;
+    uint16_t pal_tx_base;
+    uint16_t pal_bg_base;
+    uint16_t pal_sp16_base;
+    uint16_t pal_sp32_base;
+} snk_psychos_state_file_t;
+
+static void snk_pack_z80_state(snk_z80_state_file_t *dst, const snk_z80_context_t *src)
+{
+    const Z80_Regs *r = &src->regs;
+    memset(dst, 0, sizeof(*dst));
+    dst->pc = r->pc.d; dst->sp = r->sp.d; dst->af = r->af.d; dst->bc = r->bc.d;
+    dst->de = r->de.d; dst->hl = r->hl.d; dst->ix = r->ix.d; dst->iy = r->iy.d;
+    dst->wz = r->wz.d; dst->af2 = r->af2.d; dst->bc2 = r->bc2.d; dst->de2 = r->de2.d;
+    dst->hl2 = r->hl2.d; dst->prvpc = r->prvpc.d;
+    dst->r = r->r; dst->r2 = r->r2; dst->iff1 = r->iff1; dst->iff2 = r->iff2;
+    dst->halt = r->halt; dst->im = r->im; dst->i = r->i;
+    dst->after_ei = r->after_ei; dst->after_ldair = r->after_ldair;
+    dst->ea = r->ea;
+    dst->nmi_state = r->nmi_state; dst->nmi_pending = r->nmi_pending; dst->irq_state = r->irq_state;
+    dst->icount = r->icount; dst->wait_state = r->wait_state; dst->busrq_state = r->busrq_state;
+    dst->cycles = src->cycles;
+}
+
+static void snk_unpack_z80_state(snk_z80_context_t *dst, const snk_z80_state_file_t *src)
+{
+    Z80_Regs *r = &dst->regs;
+    r->pc.d = src->pc; r->sp.d = src->sp; r->af.d = src->af; r->bc.d = src->bc;
+    r->de.d = src->de; r->hl.d = src->hl; r->ix.d = src->ix; r->iy.d = src->iy;
+    r->wz.d = src->wz; r->af2.d = src->af2; r->bc2.d = src->bc2; r->de2.d = src->de2;
+    r->hl2.d = src->hl2; r->prvpc.d = src->prvpc;
+    r->r = src->r; r->r2 = src->r2; r->iff1 = src->iff1; r->iff2 = src->iff2;
+    r->halt = src->halt; r->im = src->im; r->i = src->i;
+    r->after_ei = src->after_ei; r->after_ldair = src->after_ldair;
+    r->ea = src->ea;
+    r->nmi_state = src->nmi_state; r->nmi_pending = src->nmi_pending; r->irq_state = src->irq_state;
+    r->icount = src->icount; r->wait_state = src->wait_state; r->busrq_state = src->busrq_state;
+    r->irq_callback = snk_irq_callback;
+    dst->cycles = src->cycles;
+}
+
+static uint32_t snk_psychos_ram_state_size(void)
+{
+    return SNK_SHARE_SIZE + SNK_BGVRAM_SIZE + SNK_SPRRAM_SIZE + SNK_TXVRAM_SIZE + SNK_AUDIORAM_SIZE;
+}
+
+static uint32_t snk_psychos_base_state_size(void)
+{
+    return (uint32_t)(sizeof(snk_psychos_state_file_t) +
+                      sizeof(snk_z80_state_file_t) * SNK_CPU_COUNT +
+                      snk_psychos_ram_state_size());
+}
+
+static uint32_t snk_psychos_sound_state_size(uint32_t *ym0_size, uint32_t *ym1_size)
+{
+    uint32_t y0, y1;
+    snk_psychos_sound_ensure_chips();
+    y0 = OPL_GetStateSize(snk.ym[0]);
+    y1 = OPL_GetStateSize(snk.ym[1]);
+    if (ym0_size) *ym0_size = y0;
+    if (ym1_size) *ym1_size = y1;
+    return (uint32_t)(sizeof(snk_psychos_sound_state_file_t) + y0 + y1);
+}
+
+uint32_t snk_psychos_state_size(void)
+{
+    uint32_t y0, y1;
+    return snk_psychos_base_state_size() + snk_psychos_sound_state_size(&y0, &y1);
+}
+
+static int snk_write_block(FILE *fd, const void *data, uint32_t size)
+{
+    return size == 0 || fwrite(data, 1, size, fd) == size;
+}
+
+static int snk_read_block(FILE *fd, void *data, uint32_t size)
+{
+    return size == 0 || fread(data, 1, size, fd) == size;
+}
+
+static int snk_write_opl_state(FILE *fd, opl_chip_t *chip, uint32_t size)
+{
+    uint8_t *buf;
+    int ok;
+    if (!size) return 1;
+    buf = (uint8_t *)malloc(size);
+    if (!buf) return 0;
+    ok = OPL_SaveState(chip, buf, size) && snk_write_block(fd, buf, size);
+    free(buf);
+    return ok;
+}
+
+static int snk_read_opl_state(FILE *fd, opl_chip_t *chip, uint32_t size)
+{
+    uint8_t *buf;
+    int ok;
+    if (!size) return 1;
+    buf = (uint8_t *)malloc(size);
+    if (!buf) return 0;
+    ok = snk_read_block(fd, buf, size) && OPL_LoadState(chip, buf, size);
+    free(buf);
+    return ok;
+}
+
+int snk_psychos_save_state(FILE *fd)
+{
+    snk_psychos_state_file_t st;
+    snk_psychos_sound_state_file_t sndst;
+    snk_z80_state_file_t cpust[SNK_CPU_COUNT];
+    uint32_t ym0_size = 0, ym1_size = 0;
+    int i;
+
+    if (!fd || !snk.active)
+        return 0;
+
+    memset(&st, 0, sizeof(st));
+    st.magic = SNK_PSYCHOS_STATE_MAGIC;
+    st.version = SNK_PSYCHOS_STATE_VERSION;
+    st.size = snk_psychos_base_state_size() + snk_psychos_sound_state_size(&ym0_size, &ym1_size);
+    st.current_cpu = snk.current_cpu;
+    st.active = snk.active;
+    st.athena_main_ramtest_done = snk.athena_main_ramtest_done;
+    st.sound_latch = snk.sound_latch;
+    st.sound_status = snk.sound_status;
+    st.sound_irq_pending = snk.sound_irq_pending;
+    st.ym1_addr = snk.ym1_addr;
+    st.ym2_addr = snk.ym2_addr;
+    st.bg_scrollx = snk.bg_scrollx;
+    st.bg_scrolly = snk.bg_scrolly;
+    st.sp16_scrollx = snk.sp16_scrollx;
+    st.sp16_scrolly = snk.sp16_scrolly;
+    st.sp32_scrollx = snk.sp32_scrollx;
+    st.sp32_scrolly = snk.sp32_scrolly;
+    st.sprite_split = snk.sprite_split;
+    st.video_attr = snk.video_attr;
+    st.tx_tile_offset = snk.tx_tile_offset;
+    st.tx_palette_offset = snk.tx_palette_offset;
+    st.bg_palette_offset = snk.bg_palette_offset;
+    st.hf_posx = snk.hf_posx;
+    st.hf_posy = snk.hf_posy;
+    st.dsw1 = snk.dsw1;
+    st.dsw2 = snk.dsw2;
+    st.game_type = snk.game_type;
+    st.rotate = snk.rotate;
+    st.sprite_bpp = snk.sprite_bpp;
+    st.screen_w = snk.screen_w;
+    st.screen_h = snk.screen_h;
+    st.crop_x = snk.crop_x;
+    st.crop_y = snk.crop_y;
+    st.crop_w = snk.crop_w;
+    st.crop_h = snk.crop_h;
+    st.tx_cols = snk.tx_cols;
+    st.tx_rows = snk.tx_rows;
+    st.tx_scroll_y = snk.tx_scroll_y;
+    st.bg_scrolldx = snk.bg_scrolldx;
+    st.bg_scrolldy = snk.bg_scrolldy;
+    st.pal_tx_base = snk.pal_tx_base;
+    st.pal_bg_base = snk.pal_bg_base;
+    st.pal_sp16_base = snk.pal_sp16_base;
+    st.pal_sp32_base = snk.pal_sp32_base;
+
+    for (i = 0; i < SNK_CPU_COUNT; i++)
+        snk_pack_z80_state(&cpust[i], &snk.cpu[i]);
+
+    memset(&sndst, 0, sizeof(sndst));
+    sndst.magic = SNK_PSYCHOS_SOUND_STATE_MAGIC;
+    sndst.version = SNK_PSYCHOS_SOUND_STATE_VERSION;
+    sndst.ym_size[0] = ym0_size;
+    sndst.ym_size[1] = ym1_size;
+    sndst.size = (uint32_t)(sizeof(sndst) + ym0_size + ym1_size);
+
+    return snk_write_block(fd, &st, (uint32_t)sizeof(st)) &&
+           snk_write_block(fd, cpust, (uint32_t)sizeof(cpust)) &&
+           snk_write_block(fd, snk.sharedram, SNK_SHARE_SIZE) &&
+           snk_write_block(fd, snk.bg_vram, SNK_BGVRAM_SIZE) &&
+           snk_write_block(fd, snk.spriteram, SNK_SPRRAM_SIZE) &&
+           snk_write_block(fd, snk.tx_vram, SNK_TXVRAM_SIZE) &&
+           snk_write_block(fd, snk.audio_ram, SNK_AUDIORAM_SIZE) &&
+           snk_write_block(fd, &sndst, (uint32_t)sizeof(sndst)) &&
+           snk_write_opl_state(fd, snk.ym[0], ym0_size) &&
+           snk_write_opl_state(fd, snk.ym[1], ym1_size);
+}
+
+int snk_psychos_load_state(FILE *fd, uint32_t size)
+{
+    snk_psychos_state_file_t st;
+    snk_psychos_sound_state_file_t sndst;
+    snk_z80_state_file_t cpust[SNK_CPU_COUNT];
+    uint32_t consumed;
+    uint32_t remaining;
+    int have_sound_state = 0;
+    int i;
+
+    if (!fd || size < snk_psychos_base_state_size())
+        return 0;
+    if (!snk_read_block(fd, &st, (uint32_t)sizeof(st)))
+        return 0;
+    if (st.magic != SNK_PSYCHOS_STATE_MAGIC ||
+        st.version < SNK_PSYCHOS_STATE_MIN_VERSION || st.version > SNK_PSYCHOS_STATE_VERSION ||
+        st.size > size || st.size < snk_psychos_base_state_size())
+        return 0;
+    if (!snk_psychos_alloc())
+        return 0;
+
+    /* Do not silently apply a state from a different SNK board variant. */
+    if (snk.active && snk.game_type != st.game_type)
+        return 0;
+
+    snk.current_cpu = (st.current_cpu < SNK_CPU_COUNT) ? st.current_cpu : SNK_CPU_MAIN;
+    snk.active = st.active;
+    snk.athena_main_ramtest_done = st.athena_main_ramtest_done;
+    snk.sound_latch = st.sound_latch;
+    snk.sound_status = st.sound_status;
+    snk.sound_irq_pending = st.sound_irq_pending;
+    snk.ym1_addr = st.ym1_addr;
+    snk.ym2_addr = st.ym2_addr;
+    snk.bg_scrollx = st.bg_scrollx;
+    snk.bg_scrolly = st.bg_scrolly;
+    snk.sp16_scrollx = st.sp16_scrollx;
+    snk.sp16_scrolly = st.sp16_scrolly;
+    snk.sp32_scrollx = st.sp32_scrollx;
+    snk.sp32_scrolly = st.sp32_scrolly;
+    snk.sprite_split = st.sprite_split;
+    snk.video_attr = st.video_attr;
+    snk.tx_tile_offset = st.tx_tile_offset;
+    snk.tx_palette_offset = st.tx_palette_offset;
+    snk.bg_palette_offset = st.bg_palette_offset;
+    snk.hf_posx = st.hf_posx;
+    snk.hf_posy = st.hf_posy;
+    snk.dsw1 = st.dsw1;
+    snk.dsw2 = st.dsw2;
+    snk.game_type = st.game_type;
+    snk.rotate = st.rotate;
+    snk.sprite_bpp = st.sprite_bpp;
+    snk.screen_w = st.screen_w;
+    snk.screen_h = st.screen_h;
+    snk.crop_x = st.crop_x;
+    snk.crop_y = st.crop_y;
+    snk.crop_w = st.crop_w;
+    snk.crop_h = st.crop_h;
+    snk.tx_cols = st.tx_cols;
+    snk.tx_rows = st.tx_rows;
+    snk.tx_scroll_y = st.tx_scroll_y;
+    snk.bg_scrolldx = st.bg_scrolldx;
+    snk.bg_scrolldy = st.bg_scrolldy;
+    snk.pal_tx_base = st.pal_tx_base;
+    snk.pal_bg_base = st.pal_bg_base;
+    snk.pal_sp16_base = st.pal_sp16_base;
+    snk.pal_sp32_base = st.pal_sp32_base;
+
+    if (!snk_read_block(fd, cpust, (uint32_t)sizeof(cpust)) ||
+        !snk_read_block(fd, snk.sharedram, SNK_SHARE_SIZE) ||
+        !snk_read_block(fd, snk.bg_vram, SNK_BGVRAM_SIZE) ||
+        !snk_read_block(fd, snk.spriteram, SNK_SPRRAM_SIZE) ||
+        !snk_read_block(fd, snk.tx_vram, SNK_TXVRAM_SIZE) ||
+        !snk_read_block(fd, snk.audio_ram, SNK_AUDIORAM_SIZE))
+        return 0;
+
+    consumed = snk_psychos_base_state_size();
+    remaining = (st.size >= consumed) ? (st.size - consumed) : 0;
+
+    snk_build_palette();
+    snk_psychos_sound_reset();
+    snk.sound_latch = st.sound_latch;
+    snk.sound_status = st.sound_status;
+    snk.sound_irq_pending = st.sound_irq_pending;
+    snk.ym1_addr = st.ym1_addr;
+    snk.ym2_addr = st.ym2_addr;
+
+    if (st.version >= 2 && remaining >= sizeof(sndst))
+    {
+        if (!snk_read_block(fd, &sndst, (uint32_t)sizeof(sndst)))
+            return 0;
+        remaining -= (uint32_t)sizeof(sndst);
+        if (sndst.magic == SNK_PSYCHOS_SOUND_STATE_MAGIC &&
+            sndst.version == SNK_PSYCHOS_SOUND_STATE_VERSION &&
+            sndst.size >= sizeof(sndst) && sndst.size <= remaining + sizeof(sndst) &&
+            sndst.ym_size[0] + sndst.ym_size[1] <= remaining)
+        {
+            have_sound_state = 1;
+            if (!snk_read_opl_state(fd, snk.ym[0], sndst.ym_size[0]) ||
+                !snk_read_opl_state(fd, snk.ym[1], sndst.ym_size[1]))
+                return 0;
+        }
+    }
+
+    if (have_sound_state)
+    {
+        snk.sound_latch = st.sound_latch;
+        snk.sound_status = st.sound_status;
+        snk.sound_irq_pending = st.sound_irq_pending;
+        snk.ym1_addr = st.ym1_addr;
+        snk.ym2_addr = st.ym2_addr;
+    }
+
+    snk_psychos_memory_map(0);
+    for (i = 0; i < SNK_CPU_COUNT; i++)
+    {
+        snk_unpack_z80_state(&snk.cpu[i], &cpust[i]);
+        snk_map_cpu(i);
+    }
+    snk_load_cpu(snk.current_cpu);
+    snk_sound_update_irq();
+
+    vdp.height = (snk.rotate == SNK_ROT_NONE) ? snk.crop_h : snk.crop_w;
+    vdp.lpf = SNK_PSYCHOS_LINES_PER_FRAME;
+    bitmap.viewport.x = 0;
+    bitmap.viewport.y = 0;
+    bitmap.viewport.w = (snk.rotate == SNK_ROT_NONE) ? snk.crop_w : snk.crop_h;
+    bitmap.viewport.h = (snk.rotate == SNK_ROT_NONE) ? snk.crop_h : snk.crop_w;
+    bitmap.viewport.changed = 1;
+    return 1;
 }
 
 void snk_psychos_memory_map(int clear_ram)
@@ -936,7 +1415,7 @@ uint8_t snk_psychos_readmem(uint16_t address)
 
 void snk_psychos_writemem(uint16_t address, uint8_t data)
 {
-    SMSPLUS_TRACE_MEM_WRITE(address, data);
+    MULTIREXZ80_TRACE_MEM_WRITE(address, data);
 
     if (snk.current_cpu == SNK_CPU_AUDIO)
     {
@@ -1338,7 +1817,7 @@ static void snk_present_framebuf(void)
 
     for (y = 0; y < out_h; y++)
     {
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
         uint32_t *dst = (uint32_t *)(void *)(bitmap.data + (size_t)y * bitmap.pitch);
 #else
         uint16_t *dst = (uint16_t *)(void *)(bitmap.data + (size_t)y * bitmap.pitch);
@@ -1366,7 +1845,7 @@ static void snk_present_framebuf(void)
                 pval = 0;
             else
                 pval = snk.framebuf[(size_t)sy * SNK_PSYCHOS_FRAME_WIDTH + (size_t)sx];
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
             dst[x] = pval;
 #else
             dst[x] = (uint16_t)pval;
@@ -1682,7 +2161,7 @@ static void snk_draw_sprites_group(const uint8_t *source, int gfxnum, int from, 
 
 static int snk_can_render_direct(void)
 {
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
     return snk.rotate == SNK_ROT_NONE && snk.crop_x == 0 && snk.crop_y == 0 &&
            snk.crop_w == snk.screen_w && snk.crop_h == snk.screen_h &&
            bitmap.data && bitmap.width == snk.screen_w &&
@@ -1705,7 +2184,7 @@ static void snk_render(void)
     snk_decode_gfx();
 
     direct = snk_can_render_direct();
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
     snk.framebuf = direct ? (uint32_t *)(void *)bitmap.data : snk.framebuf_shadow;
 #else
     snk.framebuf = snk.framebuf_shadow;
@@ -1827,7 +2306,7 @@ void snk_psychos_frame(uint32_t skip_render)
         snk_run_cpu_delta(SNK_CPU_MAIN, cycles_per_line);
         snk_run_cpu_delta(SNK_CPU_SUB, cycles_per_line);
         snk_run_cpu_delta(SNK_CPU_AUDIO, audio_cycles_per_line);
-        SMSPLUS_sound_update(line);
+        MULTIREXZ80_sound_update(line);
     }
     snk.cpu[SNK_CPU_MAIN].cycles = 0;
     snk.cpu[SNK_CPU_SUB].cycles = 0;

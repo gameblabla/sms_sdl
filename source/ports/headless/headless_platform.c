@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,9 +25,9 @@ typedef struct playback_event
     input_t input;
 } playback_event_t;
 
-struct smsplus_headless_platform
+struct multirexz80_headless_platform
 {
-    smsplus_headless_platform_options_t opt;
+    multirexz80_headless_platform_options_t opt;
     FILE *input_record;
     FILE *audio_wav;
     FILE *trace;
@@ -122,7 +133,7 @@ static void wav_write_header(FILE *fp, uint32_t sample_rate, uint32_t data_size)
     fwrite(&data_size, 4, 1, fp);
 }
 
-static int wav_open(smsplus_headless_platform_t *p)
+static int wav_open(multirexz80_headless_platform_t *p)
 {
     if (!p->opt.audio_wav_path) return 1;
     p->audio_wav = fopen(p->opt.audio_wav_path, "wb+");
@@ -131,7 +142,7 @@ static int wav_open(smsplus_headless_platform_t *p)
     return 1;
 }
 
-static void wav_close(smsplus_headless_platform_t *p)
+static void wav_close(multirexz80_headless_platform_t *p)
 {
     if (!p->audio_wav) return;
     uint32_t bounded = p->audio_bytes > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)p->audio_bytes;
@@ -147,7 +158,7 @@ static void yuv_from_rgb(uint8_t r, uint8_t g, uint8_t b, uint8_t *y, uint8_t *u
     *v = clamp_u8(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
 }
 
-static int y4m_open(smsplus_headless_platform_t *p)
+static int y4m_open(multirexz80_headless_platform_t *p)
 {
     if (!p->opt.video_y4m_path) return 1;
     if (sms.console == CONSOLE_SNKPSYCHOS)
@@ -169,7 +180,7 @@ static int y4m_open(smsplus_headless_platform_t *p)
     return 1;
 }
 
-static int y4m_write_frame(smsplus_headless_platform_t *p)
+static int y4m_write_frame(multirexz80_headless_platform_t *p)
 {
     if (!p->video_y4m) return 1;
 
@@ -225,7 +236,7 @@ static int parse_i32(const char *s, int32_t *out)
     return 1;
 }
 
-static int playback_load(smsplus_headless_platform_t *p)
+static int playback_load(multirexz80_headless_platform_t *p)
 {
     if (!p->opt.input_playback_path) return 1;
     FILE *fp = fopen(p->opt.input_playback_path, "rb");
@@ -360,10 +371,10 @@ snprintf(path, sizeof(path), "%s_psg_context.bin", prefix);
     return 1;
 }
 
-int smsplus_headless_platform_create(smsplus_headless_platform_t **out,
-                                     const smsplus_headless_platform_options_t *options)
+int multirexz80_headless_platform_create(multirexz80_headless_platform_t **out,
+                                     const multirexz80_headless_platform_options_t *options)
 {
-    smsplus_headless_platform_t *p = calloc(1, sizeof(*p));
+    multirexz80_headless_platform_t *p = calloc(1, sizeof(*p));
     if (!p) return 0;
     if (options) p->opt = *options;
 
@@ -380,18 +391,18 @@ int smsplus_headless_platform_create(smsplus_headless_platform_t **out,
         p->trace = fopen(p->opt.trace_path, "wb");
         if (!p->trace) goto fail;
     }
-    SMSPLUS_TRACE_SET_TRACE(p->trace);
+    MULTIREXZ80_TRACE_SET_TRACE(p->trace);
     if (!y4m_open(p)) goto fail;
 
     *out = p;
     return 1;
 
 fail:
-    smsplus_headless_platform_destroy(p);
+    multirexz80_headless_platform_destroy(p);
     return 0;
 }
 
-void smsplus_headless_platform_destroy(smsplus_headless_platform_t *p)
+void multirexz80_headless_platform_destroy(multirexz80_headless_platform_t *p)
 {
     if (!p) return;
     wav_close(p);
@@ -402,9 +413,9 @@ void smsplus_headless_platform_destroy(smsplus_headless_platform_t *p)
     free(p);
 }
 
-int smsplus_headless_platform_begin_frame(smsplus_headless_platform_t *p, uint64_t frame)
+int multirexz80_headless_platform_begin_frame(multirexz80_headless_platform_t *p, uint64_t frame)
 {
-    SMSPLUS_TRACE_SET_FRAME(frame);
+    MULTIREXZ80_TRACE_SET_FRAME(frame);
     if (!p) return 1;
     while (p->playback_index < p->playback_count && p->playback[p->playback_index].frame <= frame)
     {
@@ -414,9 +425,9 @@ int smsplus_headless_platform_begin_frame(smsplus_headless_platform_t *p, uint64
     return 1;
 }
 
-int smsplus_headless_platform_end_frame(smsplus_headless_platform_t *p, uint64_t frame)
+int multirexz80_headless_platform_end_frame(multirexz80_headless_platform_t *p, uint64_t frame)
 {
-    SMSPLUS_TRACE_CPU_FRAME(frame);
+    MULTIREXZ80_TRACE_CPU_FRAME(frame);
     if (!p) return 1;
 
     if (p->input_record)
@@ -454,7 +465,7 @@ int smsplus_headless_platform_end_frame(smsplus_headless_platform_t *p, uint64_t
     return 1;
 }
 
-int smsplus_headless_platform_save_final(smsplus_headless_platform_t *p, uint64_t frame)
+int multirexz80_headless_platform_save_final(multirexz80_headless_platform_t *p, uint64_t frame)
 {
     int ok = 1;
     if (!p) return 1;

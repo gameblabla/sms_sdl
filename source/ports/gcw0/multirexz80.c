@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -10,7 +21,7 @@
 
 #include "shared.h"
 #include "scaler.h"
-#include "smsplus.h"
+#include "multirexz80.h"
 #include "sdl12_common.h"
 #include "font_drawing.h"
 #include "sound_output.h"
@@ -19,19 +30,27 @@
 #define SDL_TRIPLEBUF SDL_DOUBLEBUF
 #endif
 
+#define SDL_FLAGS SDL_HWSURFACE | SDL_TRIPLEBUF
+
+static SDL_Joystick * sdl_joy[3];
+#define DEADZONE_JOYSTICK 8192
+
+static int32_t joy_axis[2] = {0, 0};
+
 static gamedata_t gdata;
 
 t_config option;
 
-static char home_path[256];
+static char home_path[128];
+
+static int joy_numb = 1;
 
 static SDL_Surface* sdl_screen, *scale2x_buf;
-SDL_Surface *sms_bitmap;
 static SDL_Surface *backbuffer;
-static SDL_Surface* miniscreen;
 extern SDL_Surface *font;
 extern SDL_Surface *bigfontred;
 extern SDL_Surface *bigfontwhite;
+SDL_Surface *sms_bitmap;
 
 static uint8_t selectpressed = 0;
 static uint8_t save_slot = 0;
@@ -43,8 +62,17 @@ static const int8_t upscalers_available = 1
 #endif
 ;
 
+static int width_hold = 256;
+static int width_remember = 256;
+static int width_remove = 0;
+static int remember_res_height;
+
+static int scale2x_res = 1;
 static uint_fast8_t forcerefresh = 0;
 static uint_fast8_t dpad_input[4] = {0, 0, 0, 0};
+uint_fast16_t pixels_shifting_remove = 0;
+
+int update_window_size(int w, int h);
 
 static void Clear_video()
 {
@@ -60,94 +88,108 @@ static void Clear_video()
 
 static void video_update()
 {
-	uint32_t dst_x, dst_w, hide_left;
-	SDL_Rect dst;
+	SDL_Rect src, dst;
+	multirexz80_sdl12_view_t view;
+	int target_w, target_h;
+	int locked = 0;
+	int screen_pitch;
 
-	SDL_LockSurface(sdl_screen);
+	multirexz80_sdl12_get_active_view(&view);
+	width_hold = view.w;
+	width_remove = view.x;
+
+	if (option.fullscreen == 2) scale2x_res = 2;
+	else scale2x_res = 1;
+
+	target_w = (option.fullscreen == 0) ? view.w * scale2x_res : HOST_WIDTH_RESOLUTION;
+	target_h = (option.fullscreen == 0) ? view.h * scale2x_res : HOST_HEIGHT_RESOLUTION;
+	if (remember_res_height != target_h || width_remember != target_w || forcerefresh == 1)
+	{
+		remember_res_height = target_h;
+		width_remember = target_w;
+		if (update_window_size(target_w, target_h))
+			return;
+		forcerefresh = 0;
+	}
+
+	src.x = (Sint16)view.x;
+	src.y = (Sint16)view.y;
+	src.w = (Uint16)view.w;
+	src.h = (Uint16)view.h;
+	SDL_FillRect(sdl_screen, NULL, 0);
+
 	switch(option.fullscreen) 
 	{
-		// Native
+		/* Native */
         case 0: 
-		if(sms.console == CONSOLE_GG) 
-			bitmap_scale(48,0,160,144,160,144,256,HOST_WIDTH_RESOLUTION-160,(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)sdl_screen->pixels+(HOST_WIDTH_RESOLUTION-160)/2+(HOST_HEIGHT_RESOLUTION-144)/2*HOST_WIDTH_RESOLUTION);
-		else
-		{
-				hide_left = (vdp.reg[0] & 0x20) ? 1 : 0;
-				dst_x = 8;
-				dst_w = 240;
-				bitmap_scale(dst_x,0,
-				dst_w,vdp.height,
-				dst_w,vdp.height,
-				256, sdl_screen->w-dst_w,
-				(uint16_t* restrict)sms_bitmap->pixels,(uint16_t* restrict)sdl_screen->pixels+(sdl_screen->w-(dst_w))/2+(sdl_screen->h-(vdp.height))/2*sdl_screen->w);
-		}
-		
-		//sdl_screen->pixels = sms_bitmap->pixels;
-		//SDL_BlitSurface(sms_bitmap, NULL, sdl_screen, NULL);
-		break;
-		// Fullscreen
-		case 1:
-		default:
-		if(sms.console == CONSOLE_GG) 
-		{
-			dst.x = 48;
-			dst.y = 0;
-			dst.w = 160;
-			dst.h = 144;
-		}
-		else
-		{
-			hide_left = (vdp.reg[0] & 0x20) ? 1 : 0;
-			dst.x = hide_left ? 8 : 0;
-			dst.y = 0;
-			dst.w = (hide_left ? 248 : 256);
-			dst.h = vdp.height;
-		}
-		SDL_SoftStretch(sms_bitmap, &dst, sdl_screen, NULL);
-		break;
-		// Hqx
+			dst.x = (Sint16)((sdl_screen->w - src.w) / 2);
+			dst.y = (Sint16)((sdl_screen->h - src.h) / 2);
+			if (dst.x < 0) dst.x = 0;
+			if (dst.y < 0) dst.y = 0;
+			SDL_BlitSurface(sms_bitmap, &src, sdl_screen, &dst);
+			break;
+        case 1:
+			multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w, view.h);
+			if (SDL_MUSTLOCK(sdl_screen))
+			{
+				if (SDL_LockSurface(sdl_screen) < 0)
+					break;
+				locked = 1;
+			}
+			screen_pitch = multirexz80_sdl12_surface_pitch_pixels(sdl_screen);
+			if (screen_pitch <= 0) screen_pitch = sdl_screen->w;
+			bitmap_scale(view.x, view.y, view.w, view.h, dst.w, dst.h,
+			             view.pitch_pixels, screen_pitch - dst.w,
+			             (uint16_t * restrict)sms_bitmap->pixels,
+			             (uint16_t * restrict)sdl_screen->pixels + dst.x + dst.y * screen_pitch);
+			if (locked) { SDL_UnlockSurface(sdl_screen); locked = 0; }
+			break;
 		case 2:
 #ifdef SCALE2X_UPSCALER
-		if(sms.console == CONSOLE_GG) 
-		{
-			dst.x = 96;
-			dst.y = 0;
-			dst.w = 320;
-			dst.h = 144*2;
-		}
-		else
-		{
-			hide_left = (vdp.reg[0] & 0x20) ? 1 : 0;
-			dst.x = hide_left ? 16 : 0;
-			dst.y = 0;
-			dst.w = (hide_left ? 248 : 256)*2;
-			dst.h = vdp.height*2;
-		}
-		scale2x(sms_bitmap->pixels, scale2x_buf->pixels, 512, 1024, 256, vdp.height);
-		bitmap_scale(dst.x,0,dst.w,dst.h,HOST_WIDTH_RESOLUTION,HOST_HEIGHT_RESOLUTION,512,0,scale2x_buf->pixels,sdl_screen->pixels);
+			if (view.w * 2 <= scale2x_buf->w && view.h * 2 <= scale2x_buf->h)
+			{
+				scale2x((uint16_t *)sms_bitmap->pixels + view.y * view.pitch_pixels + view.x,
+				        (uint16_t *)scale2x_buf->pixels,
+				        sms_bitmap->pitch,
+				        scale2x_buf->pitch,
+				        view.w, view.h);
+				multirexz80_sdl12_fit_rect(&dst, sdl_screen->w, sdl_screen->h, view.w * 2, view.h * 2);
+				if (SDL_MUSTLOCK(sdl_screen))
+				{
+					if (SDL_LockSurface(sdl_screen) < 0)
+						break;
+					locked = 1;
+				}
+				screen_pitch = multirexz80_sdl12_surface_pitch_pixels(sdl_screen);
+				if (screen_pitch <= 0) screen_pitch = sdl_screen->w;
+				bitmap_scale(0, 0, view.w * 2, view.h * 2, dst.w, dst.h,
+				             scale2x_buf->pitch >> 1, screen_pitch - dst.w,
+				             (uint16_t * restrict)scale2x_buf->pixels,
+				             (uint16_t * restrict)sdl_screen->pixels + dst.x + dst.y * screen_pitch);
+				if (locked) { SDL_UnlockSurface(sdl_screen); locked = 0; }
+			}
 #endif
-		break;
+			break;
 	}
-	SDL_UnlockSurface(sdl_screen);	
 	SDL_Flip(sdl_screen);
 }
 
 void smsp_state(uint8_t slot_number, uint8_t mode)
 {
-	smsplus_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
+	multirexz80_sdl12_state_file(gdata.stdir, gdata.gamename, slot_number, mode);
 }
 
 void system_manage_sram(uint8_t *sram, uint8_t slot_number, uint8_t mode)
 {
 	(void)slot_number;
-	smsplus_sdl12_sram_file(gdata.sramfile, sram, mode);
+	multirexz80_sdl12_sram_file(gdata.sramfile, sram, mode);
 }
 
 static uint32_t sdl_controls_update_input(SDLKey k, int32_t p)
 {
-	smsplus_sdl12_keymap_t map;
-	smsplus_sdl12_keymap_from_config(&map, option.config_buttons);
-	return smsplus_sdl12_update_key(k, p, &map, &selectpressed);
+	multirexz80_sdl12_keymap_t map;
+	multirexz80_sdl12_keymap_from_config(&map, option.config_buttons);
+	return multirexz80_sdl12_update_key(k, p, &map, &selectpressed);
 }
 
 
@@ -155,7 +197,7 @@ static uint32_t sdl_controls_update_input(SDLKey k, int32_t p)
 static void bios_init()
 {
 	FILE *fd;
-	char bios_path[256];
+	char bios_path[384];
 	
 	bios.rom = malloc(0x100000);
 	bios.enabled = 0;
@@ -167,12 +209,12 @@ static void bios_init()
 	{
 		/* Seek to end of file, and get size */
 		fseek(fd, 0, SEEK_END);
-		long size = ftell(fd);
+		uint32_t size = ftell(fd);
 		fseek(fd, 0, SEEK_SET);
 		if (size < 0x4000) size = 0x4000;
 		fread(bios.rom, size, 1, fd);
 		bios.enabled = 2;  
-		bios.pages = (uint16_t)size / 0x4000;
+		bios.pages = size / 0x4000;
 		fclose(fd);
 	}
 
@@ -191,7 +233,7 @@ static void bios_init()
 static void smsp_gamedata_set(char *filename) 
 {
 	// Set paths, create directories
-	snprintf(home_path, sizeof(home_path), "%s/.smsplus/", getenv("HOME"));
+	snprintf(home_path, sizeof(home_path), "%s/.multirexz80/", getenv("HOME"));
 	
 	if (mkdir(home_path, 0755) && errno != EEXIST) {
 		fprintf(stderr, "Failed to create %s: %d\n", home_path, errno);
@@ -242,38 +284,42 @@ static const char* Return_Text_Button(uint32_t button)
 	switch(button)
 	{
 		/* UP button */
-		case 273:
-			return "D-UP";
+		case SDLK_UP:
+			return "DPAD UP";
 		/* DOWN button */
-		case 274:
-			return "D-DOWN";
+		case SDLK_DOWN:
+			return "DPAD DOWN";
 		/* LEFT button */
-		case 276:
-			return "D-LEFT";
+		case SDLK_LEFT:
+			return "DPAD LEFT";
 		/* RIGHT button */
-		case 275:
-			return "D-RIGHT";
+		case SDLK_RIGHT:
+			return "DPAD RIGHT";
 		/* A button */
-		case 306:
-			return "A";
+		case SDLK_LCTRL:
+			return "A button";
 		/* B button */
-		case 308:
-			return "B";
-		/* X button */
-		case 304:
-			return "X";
+		case SDLK_LALT:
+			return "B button";
 		/* Y button */
-		case 32:
-			return "Y";
+		case SDLK_LSHIFT:
+			return "Y button";
+		/* X button */
+		case SDLK_SPACE:
+			return "X button";
 		/* L button */
-		case 9:
-			return "L";
+		case SDLK_TAB:
+			return "L1";
 		/* R button */
-		case 8:
-			return "R";
+		case SDLK_BACKSPACE:
+			return "R1";
+		case SDLK_PAGEUP:
+			return "L2";
+		case SDLK_PAGEDOWN:
+			return "R2";
 		/* Power button */
-		case 279:
-			return "Menu";
+		case SDLK_HOME:
+			return "POWER";
 		/* Brightness */
 		case 34:
 			return "Brightness";
@@ -284,10 +330,15 @@ static const char* Return_Text_Button(uint32_t button)
 		case 233:
 			return "Volume +";
 		/* Start */
-		case 13:
-			return "Start";
-		default:
+		case SDLK_RETURN:
+			return "Start button";
+		/* Select */
+		case SDLK_ESCAPE:
+			return "Select button";
+		case 0:
 			return "...";
+		default:
+			return "Unknown";
 	}	
 }
 
@@ -311,18 +362,26 @@ static const char* Return_Volume(uint32_t vol)
 	}	
 }
 
+static void Draw_Option(int32_t numb, int32_t selection, const char* drawtext, int32_t x, int32_t y)
+{
+	char text[18];
+	snprintf(text, sizeof(text), drawtext, Return_Text_Button(option.config_buttons[numb]));
+	if (selection == numb+1) print_string(text, TextRed, 0, x, y+2, (uint16_t*)backbuffer->pixels);
+	else print_string(text, TextWhite, 0, x, y+2, (uint16_t*)backbuffer->pixels);
+}
+
 static void Input_Remapping()
 {
 	SDL_Event Event;
-	char text[50];
+	uint32_t pressed = 0;
 	int32_t currentselection = 1;
 	int32_t exit_input = 0;
 	uint32_t exit_map = 0;
 	
 	while(!exit_input)
 	{
+		pressed = 0;
 		SDL_FillRect( backbuffer, NULL, 0 );
-		SDL_BlitSurface(miniscreen,NULL,backbuffer, NULL);
 		
         while (SDL_PollEvent(&Event))
         {
@@ -354,26 +413,7 @@ static void Input_Remapping()
                         break;
                     case SDLK_LCTRL:
                     case SDLK_RETURN:
-						SDL_FillRect( backbuffer, NULL, 0 );
-						SDL_BlitSurface(miniscreen,NULL,backbuffer, NULL);
-						print_string("Press button to map", TextWhite, TextBlue, 37, 108, backbuffer->pixels);
-						SDL_BlitSurface(backbuffer, NULL, sdl_screen, NULL);
-						SDL_Flip(sdl_screen);
-						exit_map = 0;
-						while( !exit_map )
-						{
-							while (SDL_PollEvent(&Event))
-							{
-								if (Event.type == SDL_KEYDOWN)
-								{
-									if (Event.key.keysym.sym != SDLK_END)
-									{
-										option.config_buttons[currentselection - 1] = Event.key.keysym.sym;
-										exit_map = 1;
-									}
-								}
-							}
-						}
+                        pressed = 1;
 					break;
                     case SDLK_LALT:
                         exit_input = 1;
@@ -395,88 +435,62 @@ static void Input_Remapping()
                 }
             }
         }
+
+        if (pressed)
+        {
+			SDL_FillRect( backbuffer, NULL, 0 );
+			print_string("Please press button for mapping", TextWhite, TextBlue, 37, 108, backbuffer->pixels);
+			SDL_SoftStretch(backbuffer, NULL, sdl_screen, NULL);
+			SDL_Flip(sdl_screen);
+			exit_map = 0;
+			while( !exit_map )
+			{
+				while (SDL_PollEvent(&Event))
+				{
+					if (Event.type == SDL_KEYDOWN)
+					{
+						if (Event.key.keysym.sym != SDLK_END && Event.key.keysym.sym != SDLK_HOME && Event.key.keysym.sym != SDLK_RCTRL)
+						{
+							option.config_buttons[currentselection - 1] = Event.key.keysym.sym;
+							exit_map = 1;
+						}
+					}
+				}
+			}
+        }
 		
-		print_string("Input remapping", TextWhite, 0, 64, 10, backbuffer->pixels);
+		print_string("Input remapping", TextWhite, 0, 100, 10, backbuffer->pixels);
 		
-		print_string("[A] = Map", TextWhite, TextBlue, 5, 210, backbuffer->pixels);
-		print_string("[B] = Exit", TextWhite, TextBlue, 5, 225, backbuffer->pixels);
+		print_string("Press [A] to map to a button", TextWhite, TextBlue, 50, 210, backbuffer->pixels);
+		print_string("Press [B] to Exit", TextWhite, TextBlue, 85, 225, backbuffer->pixels);
 		
-		snprintf(text, sizeof(text), "UP  : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_UP]));
-		if (currentselection == 1) print_string(text, TextRed, 0, 5, 25+2, backbuffer->pixels);
-		else print_string(text, TextWhite, 0, 5, 25+2, backbuffer->pixels);
+		Draw_Option(0, currentselection, "  UP  : %s\n", 5, 25);
+		Draw_Option(1, currentselection, " DOWN : %s\n", 5, 45);
+		Draw_Option(2, currentselection, " LEFT : %s\n", 5, 65);
+		Draw_Option(3, currentselection, "RIGHT : %s\n", 5, 85);
 		
-		snprintf(text, sizeof(text), "DOWN : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_DOWN]));
-		if (currentselection == 2) print_string(text, TextRed, 0, 5, 45+2, backbuffer->pixels);
-		else print_string(text, TextWhite, 0, 5, 45+2, backbuffer->pixels);
-		
-		snprintf(text, sizeof(text), "LEFT : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_LEFT]));
-		if (currentselection == 3) print_string(text, TextRed, 0, 5, 65+2, backbuffer->pixels);
-		else print_string(text, TextWhite, 0, 5, 65+2, backbuffer->pixels);
-		
-		snprintf(text, sizeof(text), "RIGHT : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_RIGHT]));
-		if (currentselection == 4) print_string(text, TextRed, 0, 5, 85+2, backbuffer->pixels);
-		else print_string(text, TextWhite, 0, 5, 85+2, backbuffer->pixels);
-		
-		snprintf(text, sizeof(text), "BTN 1 : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_BUTTON1]));
-		if (currentselection == 5) print_string(text, TextRed, 0, 5, 105+2, backbuffer->pixels);
-		else print_string(text, TextWhite, 0, 5, 105+2, backbuffer->pixels);
-		
-		snprintf(text, sizeof(text), "BTN 2 : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_BUTTON2]));
-		if (currentselection == 6) print_string(text, TextRed, 0, 5, 125+2, backbuffer->pixels);
-		else print_string(text, TextWhite, 0, 5, 125+2, backbuffer->pixels);
-		
-		snprintf(text, sizeof(text), "START : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_START]));
-		if (currentselection == 7) print_string(text, TextRed, 0, 5, 145+2, backbuffer->pixels);
-		else print_string(text, TextWhite, 0, 5, 145+2, backbuffer->pixels);
+		Draw_Option(4, currentselection, "BTN 1 : %s\n", 5, 105);
+		Draw_Option(5, currentselection, "BTN 2 : %s\n", 5, 125);
+		Draw_Option(6, currentselection, "START : %s\n", 5, 145);
 		
 		if (sms.console == CONSOLE_COLECO)
 		{
-			snprintf(text, sizeof(text), "[*]  : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_DOLLARS]));
-			if (currentselection == 8) print_string(text, TextRed, 0, 5, 165+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 5, 165+2, backbuffer->pixels);
+			Draw_Option(7, currentselection, " [*]  : %s\n", 5, 165);
+			Draw_Option(8, currentselection, " [#]  : %s\n", 5, 185);
 			
-			snprintf(text, sizeof(text), "[#]  : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_ASTERISK]));
-			if (currentselection == 9) print_string(text, TextRed, 0, 5, 185+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 5, 185+2, backbuffer->pixels);
+			Draw_Option(9, currentselection, " [1]  : %s\n", 165, 25);
+			Draw_Option(10, currentselection, " [2]  : %s\n", 165, 45);
 			
-			snprintf(text, sizeof(text), "[1] : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_ONE]));
-			if (currentselection == 10) print_string(text, TextRed, 0, 145, 25+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 145, 25+2, backbuffer->pixels);
+			Draw_Option(11, currentselection, " [3]  : %s\n", 165, 65);
+			Draw_Option(12, currentselection, " [4]  : %s\n", 165, 85);
+			Draw_Option(13, currentselection, " [5]  : %s\n", 165, 105);
+			Draw_Option(14, currentselection, " [6]  : %s\n", 165, 125);
 			
-			snprintf(text, sizeof(text), "[2] : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_TWO]));
-			if (currentselection == 11) print_string(text, TextRed, 0, 145, 45+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 145, 45+2, backbuffer->pixels);
-			
-			snprintf(text, sizeof(text), "[3] : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_THREE]));
-			if (currentselection == 12) print_string(text, TextRed, 0, 145, 65+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 145, 65+2, backbuffer->pixels);
-			
-			snprintf(text, sizeof(text), "[4] : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_FOUR]));
-			if (currentselection == 13) print_string(text, TextRed, 0, 145, 85+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 145, 85+2, backbuffer->pixels);
-			
-			snprintf(text, sizeof(text), "[5] : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_FIVE]));
-			if (currentselection == 14) print_string(text, TextRed, 0, 145, 105+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 145, 105+2, backbuffer->pixels);
-			
-			snprintf(text, sizeof(text), "[6] : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_SIX]));
-			if (currentselection == 15) print_string(text, TextRed, 0, 145, 125+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 145, 125+2, backbuffer->pixels);
-			
-			snprintf(text, sizeof(text), "[7] : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_SEVEN]));
-			if (currentselection == 16) print_string(text, TextRed, 0, 145, 145+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 145, 145+2, backbuffer->pixels);
-			
-			snprintf(text, sizeof(text), "[8] : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_EIGHT]));
-			if (currentselection == 17) print_string(text, TextRed, 0, 145, 165+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 145, 165+2, backbuffer->pixels);
-			
-			snprintf(text, sizeof(text), "[9] : %s\n", Return_Text_Button(option.config_buttons[CONFIG_BUTTON_NINE]));
-			if (currentselection == 18) print_string(text, TextRed, 0, 145, 185+2, backbuffer->pixels);
-			else print_string(text, TextWhite, 0, 145, 185+2, backbuffer->pixels);
+			Draw_Option(15, currentselection, " [7]  : %s\n", 165, 145);
+			Draw_Option(16, currentselection, " [8]  : %s\n", 165, 165);
+			Draw_Option(17, currentselection, " [9]  : %s\n", 165, 185);
 		}
-		
-		SDL_BlitSurface(backbuffer, NULL, sdl_screen, NULL);
+		SDL_SoftStretch(backbuffer, NULL, sdl_screen, NULL);
 		SDL_Flip(sdl_screen);
 	}
 	
@@ -487,37 +501,18 @@ static void Menu()
 	char text[50];
     int16_t pressed = 0;
     int16_t currentselection = 1;
-    SDL_Rect dstRect;
     SDL_Event Event;
     
-	if(sms.console == CONSOLE_GG) 
-	{
-		dstRect.x = 48;
-		dstRect.y = 0;
-		dstRect.w = 160;
-		dstRect.h = 144;
-	}
-	else
-	{
-		dstRect.x = (vdp.reg[0] & 0x20) ? 8 : 0;
-		dstRect.y = 0;
-		dstRect.w = ((vdp.reg[0] & 0x20) ? 248 : 256);
-		dstRect.h = vdp.height;
-	}
-	SDL_FillRect( miniscreen, NULL, 0 );
-	SDL_SoftStretch(sms_bitmap, &dstRect, miniscreen, NULL);
-	SDL_SetAlpha(miniscreen, SDL_SRCALPHA, 92);
-
-	Sound_Pause();
+    Sound_Pause();
 
     while (((currentselection != 1) && (currentselection != 7)) || (!pressed))
     {
         pressed = 0;
-        SDL_FillRect( backbuffer, NULL, 0 );
-        SDL_BlitSurface(miniscreen,NULL,backbuffer, NULL);
+ 		SDL_FillRect( backbuffer, NULL, 0 );
+        
+		if (SDL_MUSTLOCK(backbuffer)) SDL_LockSurface(backbuffer);
 
-		print_string("SMS PLUS GX Super", TextWhite, 0, 56, 8, backbuffer->pixels);
-		print_string("Build " __DATE__ ", " __TIME__, TextWhite, 0, 10, 20, backbuffer->pixels);
+		print_string("SMS PLUS GX", TextWhite, 0, 105, 15, backbuffer->pixels);
 		
 		if (currentselection == 1) print_string("Continue", TextRed, 0, 5, 45, backbuffer->pixels);
 		else  print_string("Continue", TextWhite, 0, 5, 45, backbuffer->pixels);
@@ -532,7 +527,6 @@ static void Menu()
 		if (currentselection == 3) print_string(text, TextRed, 0, 5, 85, backbuffer->pixels);
 		else print_string(text, TextWhite, 0, 5, 85, backbuffer->pixels);
 		
-
         if (currentselection == 4)
         {
 			switch(option.fullscreen)
@@ -541,7 +535,7 @@ static void Menu()
 					print_string("Scaling : Native", TextRed, 0, 5, 105, backbuffer->pixels);
 				break;
 				case 1:
-					print_string("Scaling : Stretched", TextRed, 0, 5, 105, backbuffer->pixels);
+					print_string("Scaling : IPU/Hardware", TextRed, 0, 5, 105, backbuffer->pixels);
 				break;
 				case 2:
 					print_string("Scaling : EPX/Scale2x", TextRed, 0, 5, 105, backbuffer->pixels);
@@ -556,7 +550,7 @@ static void Menu()
 					print_string("Scaling : Native", TextWhite, 0, 5, 105, backbuffer->pixels);
 				break;
 				case 1:
-					print_string("Scaling : Stretched", TextWhite, 0, 5, 105, backbuffer->pixels);
+					print_string("Scaling : IPU/Hardware", TextWhite, 0, 5, 105, backbuffer->pixels);
 				break;
 				case 2:
 					print_string("Scaling : EPX/Scale2x", TextWhite, 0, 5, 105, backbuffer->pixels);
@@ -575,10 +569,11 @@ static void Menu()
 		if (currentselection == 7) print_string("Quit", TextRed, 0, 5, 165, backbuffer->pixels);
 		else print_string("Quit", TextWhite, 0, 5, 165, backbuffer->pixels);
 
-
-		print_string("By gameblabla", TextWhite, 0, 5, 195, backbuffer->pixels);
-		print_string("Based on SMS Plus", TextWhite, 0, 5, 210, backbuffer->pixels);
-		print_string("Thx also Alekmaul, n2DLib", TextWhite, 0, 5, 225, backbuffer->pixels);
+		print_string("Build " __DATE__ ", " __TIME__, TextWhite, 0, 5, 195, backbuffer->pixels);
+		print_string("Based on SMS Plus GX / SMS Plus", TextWhite, 0, 5, 210, backbuffer->pixels);
+		print_string("Fork of MultiRexZ80 by gameblabla", TextWhite, 0, 5, 225, backbuffer->pixels);
+		
+		if (SDL_MUSTLOCK(backbuffer)) SDL_UnlockSurface(backbuffer);
 
         while (SDL_PollEvent(&Event))
         {
@@ -609,6 +604,8 @@ static void Menu()
                     case SDLK_LEFT:
                         switch(currentselection)
                         {
+							default:
+							break;
                             case 2:
                             case 3:
                                 if (save_slot > 0) save_slot--;
@@ -628,6 +625,8 @@ static void Menu()
                     case SDLK_RIGHT:
                         switch(currentselection)
                         {
+							default:
+							break;
                             case 2:
                             case 3:
                                 save_slot++;
@@ -686,39 +685,33 @@ static void Menu()
 				break;
             }
         }
-
-		SDL_BlitSurface(backbuffer, NULL, sdl_screen, NULL);
+		SDL_SoftStretch(backbuffer, NULL, sdl_screen, NULL);
 		SDL_Flip(sdl_screen);
     }
     
-    SDL_FillRect(sdl_screen, NULL, 0);
-    SDL_Flip(sdl_screen);
-    #ifdef SDL_TRIPLEBUF
-    SDL_FillRect(sdl_screen, NULL, 0);
-    SDL_Flip(sdl_screen);
-    #endif
-
-	Sound_Unpause();
-
+	sms.use_fm = option.fm;
+    
+	Clear_video();
     if (currentselection == 7)
         quit = 1;
-
+	else
+		Sound_Unpause();
 }
 
 static void Reset_Mapping()
 {
 	uint_fast8_t i;
-	option.config_buttons[CONFIG_BUTTON_UP] = 273;
-	option.config_buttons[CONFIG_BUTTON_DOWN] = 274;
-	option.config_buttons[CONFIG_BUTTON_LEFT] = 276;
-	option.config_buttons[CONFIG_BUTTON_RIGHT] = 275;
+	option.config_buttons[CONFIG_BUTTON_UP] = SDLK_UP;
+	option.config_buttons[CONFIG_BUTTON_DOWN] = SDLK_DOWN;
+	option.config_buttons[CONFIG_BUTTON_LEFT] = SDLK_LEFT;
+	option.config_buttons[CONFIG_BUTTON_RIGHT] = SDLK_RIGHT;
 		
-	option.config_buttons[CONFIG_BUTTON_BUTTON1] = 306;
-	option.config_buttons[CONFIG_BUTTON_BUTTON2] = 308;
+	option.config_buttons[CONFIG_BUTTON_BUTTON1] = SDLK_LCTRL;
+	option.config_buttons[CONFIG_BUTTON_BUTTON2] = SDLK_LALT;
 		
-	option.config_buttons[CONFIG_BUTTON_START] = 13;
+	option.config_buttons[CONFIG_BUTTON_START] = SDLK_RETURN;
 	
-	/* This is for the Colecovision buttons. Set to  by default */
+	/* This is for the Colecovision buttons. Don't set those to anything */
 	for (i = 7; i < 18; i++)
 	{
 		option.config_buttons[i] = 0;
@@ -768,27 +761,39 @@ static void config_save()
 static void Cleanup(void)
 {
 #ifdef SCALE2X_UPSCALER
-	if (scale2x_buf)
+	if (scale2x_buf != NULL)
 	{
 		SDL_FreeSurface(scale2x_buf);
 		scale2x_buf = NULL;
 	}
 #endif
-	if (sdl_screen) SDL_FreeSurface(sdl_screen);
-	if (backbuffer) SDL_FreeSurface(backbuffer);
-	if (sms_bitmap) SDL_FreeSurface(sms_bitmap);
-	if (miniscreen) SDL_FreeSurface(miniscreen);
+	if (sdl_screen != NULL)
+	{
+		SDL_FreeSurface(sdl_screen);
+		sdl_screen = NULL;
+	}
+	if (backbuffer != NULL)
+	{
+		SDL_FreeSurface(backbuffer);
+		backbuffer = NULL;
+	}
+	if (sms_bitmap != NULL)
+	{
+		SDL_FreeSurface(sms_bitmap);
+		sms_bitmap = NULL;
+	}
 	
-	backbuffer = NULL;
-	sms_bitmap = NULL;
-	miniscreen = NULL;
+	if (bios.rom != NULL)
+	{
+		free(bios.rom);
+		bios.rom = NULL;
+	}
 	
-	if (bios.rom) free(bios.rom);
-	bios.rom = NULL;
-	
-	// Deinitialize audio and video output
-	Sound_Close();
-	
+	for(int i=0;i<joy_numb;i++)
+	{
+		SDL_JoystickClose(sdl_joy[i]);
+	}
+
 	SDL_Quit();
 
 	// Shut down
@@ -796,15 +801,34 @@ static void Cleanup(void)
 	system_shutdown();	
 }
 
+int update_window_size(int w, int h)
+{
+	if (w <= 0) w = HOST_WIDTH_RESOLUTION;
+	if (h <= 0) h = HOST_HEIGHT_RESOLUTION;
+
+	/* GCW0/OpenDingux SDL exposes normal 16-bpp RGB565 modes.  Request the
+	 * actual menu/game target size; falling back to a 256-wide fullscreen mode
+	 * leaves some devices with a valid SDL surface but no visible scanout. */
+	sdl_screen = SDL_SetVideoMode(w, h, 16, SDL_FLAGS);
+	if (!sdl_screen)
+	{
+		fprintf(stderr,"SDL_SetVideoMode Initialisation error : %s",SDL_GetError());
+		printf("Width %d, Height %d, FLAGS 0x%x\n", w, h, SDL_FLAGS);
+		return 1;
+	}
+
+	if (vdp.height == 0) remember_res_height = HOST_HEIGHT_RESOLUTION;
+	
+	return 0;
+}
 
 int main (int argc, char *argv[]) 
 {
-	int axisval;
 	SDL_Event event;
 	
 	if(argc < 2) 
 	{
-		fprintf(stderr, "Usage: ./smsplus [FILE]\n");
+		fprintf(stderr, "Usage: ./multirexz80 [FILE]\n");
 		return 0;
 	}
 	
@@ -833,9 +857,6 @@ int main (int argc, char *argv[])
 	
 	if (option.fullscreen < 0 && option.fullscreen > upscalers_available) option.fullscreen = 1;
 	
-	if (sms.console == CONSOLE_SMS || sms.console == CONSOLE_SMS2)
-		sms.use_fm = 1; 
-	
 	// Load ROM
 	if(!load_rom(argv[1])) 
 	{
@@ -844,24 +865,37 @@ int main (int argc, char *argv[])
 		return 0;
 	}
 	
-	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_NOPARACHUTE);
-	
-	SDL_WM_SetCaption("SMS Plus GX Super", "SMS Plus GX Super");
-	
-	sdl_screen = SDL_SetVideoMode(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, SDL_HWSURFACE | SDL_TRIPLEBUF);
-	sms_bitmap = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_WIDTH_SMS, 267, 16, 0, 0, 0, 0);
-	backbuffer = SDL_CreateRGBSurface(SDL_SWSURFACE, HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, 0, 0, 0, 0);
-	miniscreen = SDL_CreateRGBSurface(SDL_SWSURFACE, HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION, 16, 0, 0, 0, 0);
+	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK);
 	SDL_ShowCursor(0);
+	if (update_window_size(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION) == 1)
+	{
+		fprintf(stderr, "Error: Failed to init video window\n");
+		Cleanup();
+		return 0;
+	}
+	
+	sms_bitmap = multirexz80_sdl12_create_rgb565_surface(multirexz80_sdl12_bitmap_width(), multirexz80_sdl12_bitmap_height());
+	backbuffer = multirexz80_sdl12_create_rgb565_surface(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION);
+	font_drawing_set_target((uint16_t *)backbuffer->pixels, backbuffer->pitch >> 1, backbuffer->w, backbuffer->h);
+	
+	SDL_JoystickEventState(SDL_ENABLE);
+	
+	joy_numb = SDL_NumJoysticks();
+	if (SDL_NumJoysticks() > 3) joy_numb = 3;
+	
+	for(int i=0;i<joy_numb;i++)
+	{
+		sdl_joy[i] = SDL_JoystickOpen(i);
+	}
 
 #ifdef SCALE2X_UPSCALER
-	scale2x_buf = SDL_CreateRGBSurface(SDL_SWSURFACE, VIDEO_WIDTH_SMS*2, 267*2, 16, 0, 0, 0, 0);
+	scale2x_buf = multirexz80_sdl12_create_rgb565_surface(multirexz80_sdl12_bitmap_width()*2, multirexz80_sdl12_bitmap_height()*2);
 #endif
 	
 	fprintf(stdout, "CRC : %08X\n", cart.crc);
 	
 	// Set parameters for internal bitmap
-	bitmap.width = VIDEO_WIDTH_SMS;
+	bitmap.width = sms_bitmap->w;
 	bitmap.height = sms_bitmap->h;
 	bitmap.depth = 16;
 	bitmap.data = (uint8_t *)sms_bitmap->pixels;
@@ -872,6 +906,8 @@ int main (int argc, char *argv[])
 	bitmap.viewport.y = 0x00;
 	
 	//sms.territory = settings.misc_region;
+	if (sms.console == CONSOLE_SMS || sms.console == CONSOLE_SMS2)
+		sms.use_fm = option.fm;
 	
 	bios_init();
 
@@ -879,11 +915,75 @@ int main (int argc, char *argv[])
 	system_poweron();
 	
 	Sound_Init();
-	
+
 	// Loop until the user closes the window
 	while (!quit) 
 	{
-		smsplus_sdl12_frame_update();
+		while (SDL_PollEvent(&event)) 
+		{
+			switch(event.type) 
+			{
+				default:
+				break;
+				case SDL_KEYUP:
+					sdl_controls_update_input(event.key.keysym.sym, 0);
+					switch(event.key.keysym.sym) 
+					{
+						/*
+						 * HOME is for OpenDingux
+						 * 3 is for RetroFW
+						 * RCTRL is for PocketGo v2
+						 * ESCAPE is mapped to Select
+						*/
+						case SDLK_HOME:
+						case SDLK_END:
+						case SDLK_RCTRL:
+						case SDLK_ESCAPE:
+							selectpressed = 1;
+						break;
+						default:
+						break;
+					}
+				break;
+				case SDL_KEYDOWN:
+					sdl_controls_update_input(event.key.keysym.sym, 1);
+				break;
+				case SDL_JOYAXISMOTION:
+					switch (event.jaxis.axis)
+					{
+						case 0: /* X axis */
+							joy_axis[0] = event.jaxis.value;
+						break;
+						case 1: /* Y axis */
+							joy_axis[1] = event.jaxis.value;
+						break;
+						default:
+						break;
+					}
+				break;
+				case SDL_QUIT:
+					quit = 1;
+				break;
+			}
+		}
+		
+		if (joy_axis[0] > DEADZONE_JOYSTICK) input.pad[0] |= INPUT_RIGHT;
+		else if (joy_axis[0] < -DEADZONE_JOYSTICK) input.pad[0] |= INPUT_LEFT;
+		else if (dpad_input[1] == 0 && dpad_input[2] == 0)
+		{
+			input.pad[0] &= ~INPUT_LEFT;
+			input.pad[0] &= ~INPUT_RIGHT;
+		}
+		
+		if (joy_axis[1] > DEADZONE_JOYSTICK) input.pad[0] |= INPUT_DOWN;
+		else if (joy_axis[1] < -DEADZONE_JOYSTICK) input.pad[0] |= INPUT_UP;
+		else if (dpad_input[0] == 0 && dpad_input[3] == 0)
+		{
+			input.pad[0] &= ~INPUT_UP;
+			input.pad[0] &= ~INPUT_DOWN;
+		}
+
+		multirexz80_sdl12_frame_update();
 
 		// Execute frame(s)
 		system_frame(0);
@@ -896,39 +996,13 @@ int main (int argc, char *argv[])
 		
 		if (selectpressed == 1)
 		{
+			update_window_size(HOST_WIDTH_RESOLUTION, HOST_HEIGHT_RESOLUTION);
+            font_drawing_set_target((uint16_t *)backbuffer->pixels, backbuffer->pitch >> 1, backbuffer->w, backbuffer->h);
             Menu();
 			Clear_video();
             input.system &= (IS_GG) ? ~INPUT_START : ~INPUT_PAUSE;
             selectpressed = 0;
             forcerefresh = 1;
-		}
-		
-		if (SDL_PollEvent(&event)) 
-		{
-			switch(event.type)
-			{
-				default:
-				break;
-				case SDL_KEYUP:
-					switch(event.key.keysym.sym) 
-					{
-						case SDLK_HOME:
-						case SDLK_RCTRL:
-						case SDLK_ESCAPE:
-							selectpressed = 1;
-						break;
-						default:
-						break;
-					}
-					sdl_controls_update_input(event.key.keysym.sym, 0);
-				break;
-				case SDL_KEYDOWN:
-					sdl_controls_update_input(event.key.keysym.sym, 1);
-				break;
-				case SDL_QUIT:
-					quit = 1;
-				break;
-			}
 		}
 	}
 	

@@ -1,3 +1,14 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -20,7 +31,7 @@
 
 #include "shared.h"
 #include "scaler.h"
-#include "smsplus.h"
+#include "multirexz80.h"
 #include "sound_output.h"
 
 #include "font_drawing.h"
@@ -298,7 +309,7 @@ static void bios_init()
 static void smsp_gamedata_set(char *filename) 
 {
 	// Set paths, create directories
-	snprintf(home_path, sizeof(home_path), "%s/.smsplus/", getenv("HOME"));
+	snprintf(home_path, sizeof(home_path), "%s/.multirexz80/", getenv("HOME"));
 	
 	if (mkdir(home_path, 0755) && errno != EEXIST) {
 		fprintf(stderr, "Failed to create %s: %d\n", home_path, errno);
@@ -516,8 +527,8 @@ static void Menu()
 		if (currentselection == 6) print_string("Quit", TextRed, 0, 5, 145, buffer_fbdev[0]);
 		else print_string("Quit", TextWhite, 0, 5, 145, buffer_fbdev[0]);
 		
-		print_string("Based on SMS Plus by Charles Mcdonald", TextWhite, 0, 5, 175, buffer_fbdev[0]);
-		print_string("Fork of SMS Plus GX by gameblabla", TextWhite, 0, 5, 190, buffer_fbdev[0]);
+		print_string("Based on SMS Plus GX / SMS Plus", TextWhite, 0, 5, 175, buffer_fbdev[0]);
+		print_string("Fork of MultiRexZ80 by gameblabla", TextWhite, 0, 5, 190, buffer_fbdev[0]);
 		print_string("Scaler : Alekmaul", TextWhite, 0, 5, 205, buffer_fbdev[0]);
 		print_string("Text drawing : n2DLib", TextWhite, 0, 5, 220, buffer_fbdev[0]);
 		
@@ -618,7 +629,7 @@ int main (int argc, char *argv[])
 {
 	if(argc < 2) 
 	{
-		fprintf(stderr, "Usage: ./smsplus [FILE]\n");
+		fprintf(stderr, "Usage: ./multirexz80 [FILE]\n");
 		return 0;
 	}
 	

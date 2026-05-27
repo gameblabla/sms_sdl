@@ -1,5 +1,16 @@
-#ifndef SMSPLUS_BUILD_FEATURES_H_
-#define SMSPLUS_BUILD_FEATURES_H_
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+#ifndef MULTIREXZ80_BUILD_FEATURES_H_
+#define MULTIREXZ80_BUILD_FEATURES_H_
 
 /*
  * Build-time component selection.
@@ -9,38 +20,38 @@
  * the values once and compile either the real component implementation or a
  * small stub layer where a disabled component still needs a public ABI.
  */
-#ifndef SMSPLUS_ENABLE_ARCADE
-#define SMSPLUS_ENABLE_ARCADE 1
+#ifndef MULTIREXZ80_ENABLE_ARCADE
+#define MULTIREXZ80_ENABLE_ARCADE 1
 #endif
 
-#ifndef SMSPLUS_ENABLE_COLECO
-#define SMSPLUS_ENABLE_COLECO 1
+#ifndef MULTIREXZ80_ENABLE_COLECO
+#define MULTIREXZ80_ENABLE_COLECO 1
 #endif
 
-#ifndef SMSPLUS_ENABLE_SORDM5
-#define SMSPLUS_ENABLE_SORDM5 1
+#ifndef MULTIREXZ80_ENABLE_SORDM5
+#define MULTIREXZ80_ENABLE_SORDM5 1
 #endif
 
 /* Backwards-compatible alias for legacy code that still used SORDM5_EMU. */
-#if SMSPLUS_ENABLE_SORDM5
+#if MULTIREXZ80_ENABLE_SORDM5
 #ifndef SORDM5_EMU
 #define SORDM5_EMU 1
 #endif
 #endif
 
-static inline int smsplus_arcade_enabled(void)
+static inline int multirexz80_arcade_enabled(void)
 {
-    return SMSPLUS_ENABLE_ARCADE != 0;
+    return MULTIREXZ80_ENABLE_ARCADE != 0;
 }
 
-static inline int smsplus_coleco_enabled(void)
+static inline int multirexz80_coleco_enabled(void)
 {
-    return SMSPLUS_ENABLE_COLECO != 0;
+    return MULTIREXZ80_ENABLE_COLECO != 0;
 }
 
-static inline int smsplus_sordm5_enabled(void)
+static inline int multirexz80_sordm5_enabled(void)
 {
-    return SMSPLUS_ENABLE_SORDM5 != 0;
+    return MULTIREXZ80_ENABLE_SORDM5 != 0;
 }
 
-#endif /* SMSPLUS_BUILD_FEATURES_H_ */
+#endif /* MULTIREXZ80_BUILD_FEATURES_H_ */

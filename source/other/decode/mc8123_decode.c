@@ -1,4 +1,15 @@
 /*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+/*
  * MC-8123 ROM decryption helper.
  *
  * Derived from MAME's src/devices/cpu/z80/mc8123.cpp, licensed BSD-3-Clause.

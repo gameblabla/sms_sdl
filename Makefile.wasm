@@ -1,6 +1,6 @@
 # Raw clang/WebAssembly browser build.  This intentionally does not use Emscripten.
 # Use a WASI-capable clang/sysroot (for example wasi-sdk) and serve web/wasm/.
-PRGNAME      = web/wasm/smsplusgx.wasm
+PRGNAME      = web/wasm/multirexz80.wasm
 ifeq ($(origin CC),default)
 CC           := clang
 endif
@@ -16,7 +16,7 @@ STATIC_MEMORY_BYTES ?= 16777216
 ENABLE_ARCADE ?= 1
 ENABLE_COLECO ?= 1
 ENABLE_SORDM5 ?= 1
-FEATURE_DEFS := -DSMSPLUS_ENABLE_ARCADE=$(ENABLE_ARCADE) -DSMSPLUS_ENABLE_COLECO=$(ENABLE_COLECO) -DSMSPLUS_ENABLE_SORDM5=$(ENABLE_SORDM5)
+FEATURE_DEFS := -DMULTIREXZ80_ENABLE_ARCADE=$(ENABLE_ARCADE) -DMULTIREXZ80_ENABLE_COLECO=$(ENABLE_COLECO) -DMULTIREXZ80_ENABLE_SORDM5=$(ENABLE_SORDM5)
 
 SRCDIR = ./source ./source/other/eeprom/93c46 ./source/other/decode ./source/video/sms_vdp ./source/video/tms9918 ./source/sound/mixer ./source/sound/opll ./source/sound/opl1 ./source/cpu_cores/$(Z80_CORE) ./source/sound/psg/mame_sn76489 ./source/ports/wasm ./source/unzip
 
@@ -36,8 +36,8 @@ SRC_C        = $(foreach dir,$(SRCDIR),$(wildcard $(dir)/*.c))
 OBJS         = $(notdir $(patsubst %.c,%.wasm.o,$(SRC_C)))
 
 CFLAGS       = --target=wasm32-wasi -O2 -flto -std=gnu99 -Wall -Wextra
-CFLAGS       += $(FEATURE_DEFS) -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DMAME_PSG -DSMSPLUS_RENDER_32BPP -DSMSPLUS_WASM
-CFLAGS       += -DSMSPLUS_STATIC_MEMORY -DSMSPLUS_STATIC_MEMORY_BYTES=$(STATIC_MEMORY_BYTES)
+CFLAGS       += $(FEATURE_DEFS) -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DMAME_PSG -DMULTIREXZ80_RENDER_32BPP -DMULTIREXZ80_WASM
+CFLAGS       += -DMULTIREXZ80_STATIC_MEMORY -DMULTIREXZ80_STATIC_MEMORY_BYTES=$(STATIC_MEMORY_BYTES)
 CFLAGS += -Isource -Isource/other/eeprom/93c46 -Isource/other/decode -Isource/platform/coleco -Isource/platform/sord_m5 -Isource/video/sms_vdp -Isource/video/tms9918 -Isource/video/sega_system1 -Isource/video/snk_ikari_psychos -Isource/sound/mixer -Isource/sound/opll -Isource/sound/opl1 -Isource/sound/psg/$(PSG_ENGINE) -Isource/cpu_cores/$(Z80_CORE) -Isource/sound/psg/mame_sn76489 -Isource/ports/wasm -Isource/unzip
 LDFLAGS      = --target=wasm32-wasi -Wl,--no-entry -Wl,--export-all -Wl,--allow-undefined -Wl,--lto-O2 -flto -lm
 

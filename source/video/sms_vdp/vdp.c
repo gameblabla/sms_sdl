@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
  *
- *  additionnal code by Eke-Eke (SMS Plus GX)
+ *  additional code by Eke-Eke (SMS Plus GX)
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -540,7 +551,7 @@ void systeme_vdp_write(int chip, int32_t offset, uint8_t data)
 	vdp_t *ctx = systeme_vdp_context(chip);
 	int32_t index;
 
-	SMSPLUS_TRACE_VDP_WRITE(chip ? "systeme-vdp2" : "systeme-vdp1", offset, data);
+	MULTIREXZ80_TRACE_VDP_WRITE(chip ? "systeme-vdp2" : "systeme-vdp1", offset, data);
 
 	if (((z80_get_elapsed_cycles() + 1) / system_cycles_per_line()) > vdp.line)
 		render_line((vdp.line + 1) % vdp.lpf);
@@ -671,7 +682,7 @@ void systeme_vdp_set_line(int32_t line)
 
 void vdp_write(int32_t offset, uint8_t data)
 {
-	SMSPLUS_TRACE_VDP_WRITE("sms", offset, data);
+	MULTIREXZ80_TRACE_VDP_WRITE("sms", offset, data);
 	int32_t index;
 	if (((z80_get_elapsed_cycles() + 1) / system_cycles_per_line()) > vdp.line)
 	{
@@ -859,7 +870,7 @@ uint8_t vdp_counter_r(int32_t offset)
 
 void gg_vdp_write(int32_t offset, uint8_t data)
 {
-	SMSPLUS_TRACE_VDP_WRITE("gg", offset, data);
+	MULTIREXZ80_TRACE_VDP_WRITE("gg", offset, data);
 	int32_t index;
 
 	if (((z80_get_elapsed_cycles() + 1) / system_cycles_per_line()) > vdp.line)
@@ -937,7 +948,7 @@ void gg_vdp_write(int32_t offset, uint8_t data)
 
 void md_vdp_write(int32_t offset, uint8_t data)
 {
-	SMSPLUS_TRACE_VDP_WRITE("md", offset, data);
+	MULTIREXZ80_TRACE_VDP_WRITE("md", offset, data);
 	int32_t index;
 	switch(offset & 1)
 	{
@@ -1002,7 +1013,7 @@ void md_vdp_write(int32_t offset, uint8_t data)
 
 void tms_write(int32_t offset, uint8_t data)
 {
-	SMSPLUS_TRACE_VDP_WRITE("tms9918", offset, data);
+	MULTIREXZ80_TRACE_VDP_WRITE("tms9918", offset, data);
 	int32_t index;
 	switch(offset & 1)
 	{

@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
  *
- *  additionnal code by Eke-Eke (SMS Plus GX)
+ *  additional code by Eke-Eke (SMS Plus GX)
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -96,7 +107,7 @@ static void systeme_map_memory(int clear_ram)
 
 static void writemem_mapper_systeme(uint16_t offset, uint8_t data)
 {
-    SMSPLUS_TRACE_MEM_WRITE(offset, data);
+    MULTIREXZ80_TRACE_MEM_WRITE(offset, data);
 
     if (offset >= 0x8000 && offset <= 0xBFFF)
     {
@@ -116,7 +127,7 @@ static void writemem_mapper_systeme(uint16_t offset, uint8_t data)
 
 static void writemem_mapper_none(uint16_t offset, uint8_t data)
 {
-	SMSPLUS_TRACE_MEM_WRITE(offset, data);
+	MULTIREXZ80_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -126,7 +137,7 @@ static void writemem_mapper_sega(uint16_t offset, uint8_t data)
 	{
 		mapper_16k_w(offset & 3, data);
 	}
-	SMSPLUS_TRACE_MEM_WRITE(offset, data);
+	MULTIREXZ80_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -147,7 +158,7 @@ static void writemem_mapper_codies(uint16_t offset, uint8_t data)
 		mapper_16k_w(3,data);
 		return;
 	}
-	SMSPLUS_TRACE_MEM_WRITE(offset, data);
+	MULTIREXZ80_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -158,7 +169,7 @@ static void writemem_mapper_korea_msx(uint16_t offset, uint8_t data)
 		mapper_8k_w(offset,data);
 		return;
 	}
-	SMSPLUS_TRACE_MEM_WRITE(offset, data);
+	MULTIREXZ80_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -169,7 +180,7 @@ static void writemem_mapper_korea(uint16_t offset, uint8_t data)
 		mapper_16k_w(3,data);
 		return;
 	}
-	SMSPLUS_TRACE_MEM_WRITE(offset, data);
+	MULTIREXZ80_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -198,7 +209,7 @@ static void writemem_mapper_4pak(uint16_t offset, uint8_t data)
 		mapper_16k_w(3, (slot.fcr[1] & 0x30) + data);
 		return;
 	}
-	SMSPLUS_TRACE_MEM_WRITE(offset, data);
+	MULTIREXZ80_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -234,7 +245,7 @@ static void writemem_mapper_wonderkid(uint16_t offset, uint8_t data)
 		return;
 	}
 
-	SMSPLUS_TRACE_MEM_WRITE(offset, data);
+	MULTIREXZ80_TRACE_MEM_WRITE(offset, data);
 	cpu_writemap[offset >> 10][offset & 0x03FF] = data;
 }
 
@@ -321,7 +332,7 @@ static uint8_t mapper_93c46_read(uint16_t address)
 
 static void writemem_mapper_93c46(uint16_t offset, uint8_t data)
 {
-    SMSPLUS_TRACE_MEM_WRITE(offset, data);
+    MULTIREXZ80_TRACE_MEM_WRITE(offset, data);
 
     if (offset == 0x8000)
     {
@@ -418,7 +429,7 @@ void mapper_restore_state(void)
 
     mapper_reset();
 
-#if SMSPLUS_ENABLE_COLECO
+#if MULTIREXZ80_ENABLE_COLECO
     if (sms.console == CONSOLE_COLECO)
     {
         /* Restore the fixed ColecoVision address map, then re-apply the
@@ -457,7 +468,7 @@ void mapper_restore_state(void)
     }
 #endif
 
-#if SMSPLUS_ENABLE_SORDM5
+#if MULTIREXZ80_ENABLE_SORDM5
     if (sms.console == CONSOLE_SORDM5)
     {
         for (i = 0x00; i < 0x40; i++)
@@ -534,14 +545,14 @@ void sms_init(void)
 	/* Initialize port handlers */
 	switch(sms.console)
 	{
-#if SMSPLUS_ENABLE_COLECO
+#if MULTIREXZ80_ENABLE_COLECO
 		case CONSOLE_COLECO:
 			cpu_writeport16 = coleco_port_w;
 			cpu_readport16 = coleco_port_r;
 			data_bus_pullup = 0xFF;
 		break;
 #endif
-		#if SMSPLUS_ENABLE_SORDM5
+		#if MULTIREXZ80_ENABLE_SORDM5
 		case CONSOLE_SORDM5:
 			cpu_writeport16 = sordm5_port_w;
 			cpu_readport16 = sordm5_port_r;
@@ -665,7 +676,7 @@ void sms_reset(void)
   /* reset Memory Mapping */
   switch(sms.console)
   {
-#if SMSPLUS_ENABLE_COLECO
+#if MULTIREXZ80_ENABLE_COLECO
     case CONSOLE_COLECO:
     {
       /* $0000-$1FFF mapped to internal ROM (8K) */
@@ -712,7 +723,7 @@ void sms_reset(void)
     }
 #endif
 
-	#if SMSPLUS_ENABLE_SORDM5
+	#if MULTIREXZ80_ENABLE_SORDM5
     case CONSOLE_SORDM5:
     {
       /*
@@ -752,7 +763,7 @@ void sms_reset(void)
         cpu_writemap[i] = &sms.wram[(i - 0x1C) << 10];
       }
 
-      #ifndef SMSPLUS_HEADLESS
+      #ifndef MULTIREXZ80_HEADLESS
       printf("Sord M5 mode\n");
       #endif
       break;
@@ -948,7 +959,7 @@ void mapper_16k_w(uint16_t address, uint8_t data)
 		About the "gaiden_hack" bit :
 		I initially thought that it was a hack.
 		But it turns out the translation hack actually expects this :
-		https://github.com/libretro/smsplus-gx/issues/25
+		https://github.com/libretro/multirexz80-gx/issues/25
 		
 		TODO : Probably reimplement this ?
 	*/
@@ -1073,7 +1084,7 @@ void mapper_16k_w(uint16_t address, uint8_t data)
 
 int32_t sms_irq_callback(int32_t param)
 {
-	#if SMSPLUS_ENABLE_SORDM5
+	#if MULTIREXZ80_ENABLE_SORDM5
 	if (sms.console == CONSOLE_SORDM5)
 		return sordm5_ctc_irq_callback();
 	#endif

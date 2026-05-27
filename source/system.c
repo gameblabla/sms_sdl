@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
  *
- *  additionnal code by Eke-Eke (SMS Plus GX)
+ *  additional code by Eke-Eke (SMS Plus GX)
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -217,7 +228,7 @@ void system_frame(uint32_t skip_render)
 		}
 
 		/* Run sound chips */
-		SMSPLUS_sound_update(vdp.line);
+		MULTIREXZ80_sound_update(vdp.line);
 	}
 
 	/* Adjust Z80 cycle count for next frame */
@@ -230,7 +241,7 @@ void system_init(void)
 	pio_init();
 	vdp_init();
 	render_init();
-	SMSPLUS_sound_init();
+	MULTIREXZ80_sound_init();
 }
 
 void system_shutdown(void)
@@ -239,7 +250,7 @@ void system_shutdown(void)
 	pio_shutdown();
 	vdp_shutdown();
 	render_shutdown();
-	SMSPLUS_sound_shutdown();
+	MULTIREXZ80_sound_shutdown();
 	free_rom();
 }
 
@@ -251,7 +262,7 @@ void system_reset(void)
 	render_reset();
 	if (sms.console == CONSOLE_SYSTEM1) system1_reset();
 	if (sms.console == CONSOLE_SNKPSYCHOS) snk_psychos_reset();
-	SMSPLUS_sound_reset();
+	MULTIREXZ80_sound_reset();
 	system_manage_sram(cart.sram, SLOT_CART, SRAM_LOAD);
 	if (cart.mapper == MAPPER_93C46) eeprom93c46_load_from_sram(cart.sram);
 }

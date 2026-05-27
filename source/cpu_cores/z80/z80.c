@@ -1,4 +1,15 @@
 /*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+/*
  * Notes by Gameblabla :
  * This is a C convertion of the C++ MAME's z80 interpreter as found here :
  * https://github.com/mamedev/mame/blob/7c19aac60e12d6f5ea301bdb34d7826a01e0b06f/src/devices/cpu/z80/z80.cpp
@@ -155,7 +166,7 @@ extern uint8_t sms_readmem16(uint16_t address);
 #define HAS_LDAIR_QUIRK     0
 
 /* Current upstream MAME does not latch an NMI on the same edge that clears
- * RESET.  SMS Plus GX does not expose a RESET input line to this C port, so use
+ * RESET.  MultiRexZ80 does not expose a RESET input line to this C port, so use
  * the elapsed-cycle counter as the nearest equivalent guard. */
 #define Z80_HAS_EXECUTED() (Z80_CYCLE_COUNT != 0 || z80_exec != 0)
 
@@ -620,7 +631,7 @@ INLINE void wm(uint32_t addr, uint8_t value)
 		uint8_t *page = Z80_WRITEMAP[a >> 10];
 		if (page != dummy_write)
 		{
-			SMSPLUS_TRACE_MEM_WRITE(a, value);
+			MULTIREXZ80_TRACE_MEM_WRITE(a, value);
 			page[a & 0x03FF] = value;
 			return;
 		}

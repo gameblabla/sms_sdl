@@ -1,8 +1,19 @@
 /*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
+/*
  * C99 adapter declarations for the MAME 0.72 FM OPL/Y8950 core.
  */
-#ifndef SMSPLUS_MAME_FMOPL_H
-#define SMSPLUS_MAME_FMOPL_H
+#ifndef MULTIREXZ80_MAME_FMOPL_H
+#define MULTIREXZ80_MAME_FMOPL_H
 
 #include <stdint.h>
 
@@ -89,6 +100,9 @@ void ym3526_set_timer_handler(void *chip, OPL_TIMERHANDLER timer_handler, void *
 void ym3526_set_irq_handler(void *chip, OPL_IRQHANDLER IRQHandler, void *param);
 void ym3526_set_update_handler(void *chip, OPL_UPDATEHANDLER UpdateHandler, void *param);
 void ym3526_update_one(void *chip, OPLSAMPLE *buffer, int length);
+uint32_t ym3526_state_size(void *chip);
+int ym3526_save_state(void *chip, void *data, uint32_t size);
+int ym3526_load_state(void *chip, const void *data, uint32_t size);
 
 void *y8950_init(UINT32 clock, UINT32 rate);
 void y8950_shutdown(void *chip);
@@ -103,5 +117,8 @@ void y8950_set_delta_t_memory(void *chip, void *deltat_mem_ptr, int deltat_mem_s
 void y8950_update_one(void *chip, OPLSAMPLE *buffer, int length);
 void y8950_set_port_handler(void *chip, OPL_PORTHANDLER_W PortHandler_w, OPL_PORTHANDLER_R PortHandler_r, void *param);
 void y8950_set_keyboard_handler(void *chip, OPL_PORTHANDLER_W KeyboardHandler_w, OPL_PORTHANDLER_R KeyboardHandler_r, void *param);
+uint32_t y8950_state_size(void *chip);
+int y8950_save_state(void *chip, void *data, uint32_t size);
+int y8950_load_state(void *chip, const void *data, uint32_t size);
 
-#endif /* SMSPLUS_MAME_FMOPL_H */
+#endif /* MULTIREXZ80_MAME_FMOPL_H */

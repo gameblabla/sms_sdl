@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
  *
- *  additionnal code by Eke-Eke (SMS Plus GX)
+ *  additional code by Eke-Eke (SMS Plus GX)
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -38,6 +49,9 @@
 #define STATE2_MAGIC_LEN 8
 #define STATE2_FLAG_COMPRESSED 0x00000001u
 #define STATE2_EXTRA_MAGIC 0x31585453u /* STX1, little-endian. */
+#define STATE_RAW_CHUNK_MAGIC "SPGXRAW1"
+#define STATE_RAW_CHUNK_MAGIC_LEN 8
+#define STATE_RAW_CHUNK_SNK 0x314b4e53u /* SNK1, little-endian. */
 
 typedef struct
 {
@@ -69,6 +83,54 @@ typedef struct
     uint32_t reserved[8];
 } state2_extra_v1_t;
 
+typedef struct
+{
+    char magic[STATE_RAW_CHUNK_MAGIC_LEN];
+    uint32_t id;
+    uint32_t size;
+} state_raw_chunk_header_t;
+
+
+static int state_write_raw_chunk(FILE *fd, uint32_t id, uint32_t size, int (*writer)(FILE *))
+{
+    state_raw_chunk_header_t chunk;
+    if (!fd || !writer || !size)
+        return 0;
+    memset(&chunk, 0, sizeof(chunk));
+    memcpy(chunk.magic, STATE_RAW_CHUNK_MAGIC, STATE_RAW_CHUNK_MAGIC_LEN);
+    chunk.id = id;
+    chunk.size = size;
+    if (fwrite(&chunk, 1, sizeof(chunk), fd) != sizeof(chunk))
+        return 0;
+    return writer(fd);
+}
+
+static void state_load_raw_chunks(FILE *fd)
+{
+    state_raw_chunk_header_t chunk;
+
+    if (!fd)
+        return;
+
+    while (fread(&chunk, 1, sizeof(chunk), fd) == sizeof(chunk))
+    {
+        long payload_pos;
+        if (memcmp(chunk.magic, STATE_RAW_CHUNK_MAGIC, STATE_RAW_CHUNK_MAGIC_LEN) != 0 ||
+            chunk.size > 0x1000000u)
+            break;
+
+        payload_pos = ftell(fd);
+        if (payload_pos < 0)
+            break;
+
+        if (chunk.id == STATE_RAW_CHUNK_SNK && sms.console == CONSOLE_SNKPSYCHOS)
+            (void)snk_psychos_load_state(fd, chunk.size);
+
+        if (fseek(fd, payload_pos + (long)chunk.size, SEEK_SET) != 0)
+            break;
+    }
+}
+
 uint32_t system_save_state(FILE* fd)
 {
     /* Save VDP context */
@@ -89,6 +151,9 @@ uint32_t system_save_state(FILE* fd)
     /* Save SN76489 context */
     fwrite(&PSG, sizeof(sn76489_t), sizeof(int8_t), fd);
 
+    if (sms.console == CONSOLE_SNKPSYCHOS)
+        state_write_raw_chunk(fd, STATE_RAW_CHUNK_SNK, snk_psychos_state_size(), snk_psychos_save_state);
+
     return 0;
 }
 
@@ -107,7 +172,7 @@ void system_load_state(FILE* fd)
 
     /** restore video & audio settings (needed if timing changed) ***/
     vdp_init();
-    SMSPLUS_sound_init();
+    MULTIREXZ80_sound_init();
 
     fread(cart.fcr, 4, sizeof(int8_t), fd);
 
@@ -141,6 +206,8 @@ void system_load_state(FILE* fd)
     /* Restore palette */
     for(int32_t i = 0; i < PALETTE_SIZE; i++)
         palette_sync(i);
+
+    state_load_raw_chunks(fd);
 }
 
 static int read_file_tail(FILE *fd, uint8_t **out_data, uint32_t *out_size)
@@ -304,7 +371,7 @@ static int __attribute__((unused)) system_save_state_state2_legacy(const char *p
 
     build_state_extra(&extra);
     snprintf(metadata, sizeof(metadata),
-             "core=SMS Plus GX\nstate_format=2\nlegacy_payload_version=%04X\nrom_crc=%08X\nconsole=%u\nmapper=%u\n",
+             "core=MultiRexZ80\nstate_format=2\nlegacy_payload_version=%04X\nrom_crc=%08X\nconsole=%u\nmapper=%u\n",
              STATE_VERSION, cart.crc, sms.console, cart.mapper);
 
     if (thumbnail_xrgb8888 && thumbnail_width && thumbnail_height && thumbnail_pitch >= thumbnail_width * 4)

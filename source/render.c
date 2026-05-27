@@ -1,8 +1,19 @@
+/*
+ * MultiRexZ80
+ *
+ * Multi-system Z80 emulator based on SMS Plus GX by Eke-Eke, itself based on
+ * SMS Plus by Charles MacDonald.
+ *
+ * Default project license: GPL-2.0-or-later.  File-specific notices below
+ * are retained and take precedence for imported or derived components,
+ * including MAME-derived code and other third-party modules.
+ */
+
 /******************************************************************************
  *  Sega Master System / GameGear Emulator
  *  Copyright (C) 1998-2007  Charles MacDonald
  *
- *  additionnal code by Eke-Eke (SMS Plus GX)
+ *  additional code by Eke-Eke (SMS Plus GX)
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -86,13 +97,13 @@ static uint16_t *active_bg_list_index = &bg_list_index;
 #ifndef _8BPP_COLOR
 static uint8_t internal_buffer[0x200];
 /* Precalculated pixel table */
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
 static uint32_t pixel[PALETTE_SIZE];
 static uint32_t *systeme_pixel;
 #else
 static uint16_t pixel[PALETTE_SIZE];
 static uint16_t *systeme_pixel;
-#ifndef SMSPLUS_DISABLE_FAST_REMAP
+#ifndef MULTIREXZ80_DISABLE_FAST_REMAP
 /*
  * Fast RGB565 remap table.  The renderer internally draws palette indices
  * into internal_buffer; this table converts two adjacent 8-bit indices to two
@@ -140,7 +151,7 @@ static uint16_t active_range[2] =
 static uint32_t *lcd_persistence_buffer;
 static uint8_t *lcd_persistence_valid;
 
-#ifndef SMSPLUS_RENDER_32BPP
+#ifndef MULTIREXZ80_RENDER_32BPP
 static uint16_t lcd_blend_rgb565(uint16_t cur, uint16_t prev)
 {
 	/* Game Gear LCD persistence approximation: 75% current frame, 25% previous
@@ -270,7 +281,7 @@ static uint32_t bp_lut[0x10000];
 static void parse_satb(int32_t line);
 static void update_bg_pattern_cache(void);
 #ifndef _8BPP_COLOR
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
 static void remap_8_to_32(int32_t line);
 #else
 static void remap_8_to_16(int32_t line);
@@ -714,7 +725,7 @@ static void systeme_remap_composited_line(int32_t line, uint8_t *back, uint8_t *
 
 	LOCK_VIDEO
 
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
 	uint32_t *p = (uint32_t *)&bitmap.data[(line * bitmap.pitch)];
 	for (i = 0; i < width; i++)
 	{
@@ -794,7 +805,7 @@ void render_line(int32_t line)
 #else
 	if (render_line_to_index_buffer(0, line, &internal_buffer[0], 0, &vline))
 	{
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
 		remap_8_to_32(vline);
 #else
 		remap_8_to_16(vline);
@@ -1002,7 +1013,7 @@ void render_obj_sms(int32_t line)
 
 /* Update a palette entry */
 #ifndef _8BPP_COLOR
-#ifdef SMSPLUS_RENDER_32BPP
+#ifdef MULTIREXZ80_RENDER_32BPP
 typedef uint32_t native_pixel_t;
 #else
 typedef uint16_t native_pixel_t;
@@ -1081,8 +1092,8 @@ static void palette_sync_target(vdp_t *ctx, int32_t index
 	bitmap.pal.dirty[index] = bitmap.pal.update = 1;
 	#else
 	dst[index] = MAKE_PIXEL(r, g, b);
-#ifndef SMSPLUS_RENDER_32BPP
-#ifndef SMSPLUS_DISABLE_FAST_REMAP
+#ifndef MULTIREXZ80_RENDER_32BPP
+#ifndef MULTIREXZ80_DISABLE_FAST_REMAP
 	remap16_pair_dirty = 1;
 #endif
 #endif
@@ -1235,7 +1246,7 @@ static int32_t lightgun_cursor_line_info(int32_t line, int32_t *x_out, int32_t *
 	return 1;
 }
 
-#ifndef SMSPLUS_RENDER_32BPP
+#ifndef MULTIREXZ80_RENDER_32BPP
 static void draw_lightgun_cursor_16(uint16_t *p, int32_t width, int32_t line)
 {
 	int32_t x, dy, i;
@@ -1270,8 +1281,8 @@ static void draw_lightgun_cursor_32(uint32_t *p, int32_t width, int32_t line)
 #endif
 
 #ifndef _8BPP_COLOR
-#ifndef SMSPLUS_RENDER_32BPP
-#ifndef SMSPLUS_DISABLE_FAST_REMAP
+#ifndef MULTIREXZ80_RENDER_32BPP
+#ifndef MULTIREXZ80_DISABLE_FAST_REMAP
 static void rebuild_remap16_pair_table(void)
 {
 	uint32_t a, b;
@@ -1320,7 +1331,7 @@ static void remap_8_to_16(int32_t line)
 	}
 	else
 	{
-#ifndef SMSPLUS_DISABLE_FAST_REMAP
+#ifndef MULTIREXZ80_DISABLE_FAST_REMAP
 		uint32_t *dst32 = (uint32_t *)(void *)p;
 		int32_t pairs = width >> 1;
 		if (remap16_pair_dirty) rebuild_remap16_pair_table();

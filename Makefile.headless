@@ -1,4 +1,4 @@
-PRGNAME     = sms_headless
+PRGNAME     = multirexz80_headless
 CC          = gcc
 PSG_ENGINE ?= mame_sn76489
 ifneq ($(origin SOUND_ENGINE), undefined)
@@ -14,13 +14,13 @@ ENABLE_SORDM5 ?= 1
 
 PSG_DEFS :=
 RENDER_DEFS :=
-FEATURE_DEFS := -DSMSPLUS_ENABLE_ARCADE=$(ENABLE_ARCADE) -DSMSPLUS_ENABLE_COLECO=$(ENABLE_COLECO) -DSMSPLUS_ENABLE_SORDM5=$(ENABLE_SORDM5)
+FEATURE_DEFS := -DMULTIREXZ80_ENABLE_ARCADE=$(ENABLE_ARCADE) -DMULTIREXZ80_ENABLE_COLECO=$(ENABLE_COLECO) -DMULTIREXZ80_ENABLE_SORDM5=$(ENABLE_SORDM5)
 ifeq ($(PSG_ENGINE),mame_sn76489)
 PSG_DEFS += -DMAME_PSG
 endif
 
 ifeq ($(RENDER_BPP),32)
-RENDER_DEFS += -DSMSPLUS_RENDER_32BPP
+RENDER_DEFS += -DMULTIREXZ80_RENDER_32BPP
 endif
 
 SRCDIR = ./source ./source/other/eeprom/93c46 ./source/other/decode ./source/video/sms_vdp ./source/video/tms9918 ./source/sound/mixer ./source/sound/opll ./source/sound/opl1 ./source/cpu_cores/$(Z80_CORE) ./source/sound/psg/$(PSG_ENGINE) ./source/ports/headless
@@ -42,9 +42,9 @@ OBJ_C       = $(notdir $(patsubst %.c, %.o, $(SRC_C)))
 OBJS        = $(OBJ_C)
 
 CFLAGS      = -O2 -g -Wall -Wextra -std=gnu99
-CFLAGS      += -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DSMSPLUS_HEADLESS $(PSG_DEFS) $(RENDER_DEFS) $(FEATURE_DEFS)
+CFLAGS      += -DLSB_FIRST -DALIGN_DWORD -DNOYUV -DMULTIREXZ80_HEADLESS $(PSG_DEFS) $(RENDER_DEFS) $(FEATURE_DEFS)
 ifeq ($(STATIC_MEMORY),1)
-CFLAGS      += -DSMSPLUS_STATIC_MEMORY -DSMSPLUS_STATIC_MEMORY_BYTES=$(STATIC_MEMORY_BYTES)
+CFLAGS      += -DMULTIREXZ80_STATIC_MEMORY -DMULTIREXZ80_STATIC_MEMORY_BYTES=$(STATIC_MEMORY_BYTES)
 endif
 CFLAGS += -Isource -Isource/other/eeprom/93c46 -Isource/other/decode -Isource/platform/coleco -Isource/platform/sord_m5 -Isource/video/sms_vdp -Isource/video/tms9918 -Isource/video/sega_system1 -Isource/video/snk_ikari_psychos -Isource/sound/mixer -Isource/sound/opll -Isource/sound/opl1 -Isource/sound/psg/$(PSG_ENGINE) -Isource/cpu_cores/$(Z80_CORE) -Isource/ports/headless -Isource/sound_output -Isource/unzip
 OPL_CFLAGS   = -Ofast -fomit-frame-pointer -fno-stack-protector -DNDEBUG
